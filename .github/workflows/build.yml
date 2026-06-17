@@ -1,0 +1,110 @@
+name: Build
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            xvfb \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libglu1-mesa-dev \
+            libcurl4-openssl-dev
+
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-${{ runner.os }}-8.0.4
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          ${{ runner.os == 'macOS' && '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64' || '' }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Download pluginval (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -L "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip" -o pluginval.zip
+          unzip -o pluginval.zip
+
+      - name: Download pluginval (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -L "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip" -o pluginval.zip
+          unzip -o pluginval.zip
+
+      - name: Download pluginval (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          curl -L "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" -o pluginval.zip
+          7z x pluginval.zip -y
+
+      - name: Validate VST3 (Linux)
+        if: runner.os == 'Linux'
+        run: >
+          xvfb-run --auto-servernum
+          ./pluginval --strictness-level 5 --validate
+          $(find build -name 'PreDrop.vst3' -type d | head -n 1)
+
+      - name: Validate VST3 (macOS)
+        if: runner.os == 'macOS'
+        run: >
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate
+          "$(find build -name 'PreDrop.vst3' | head -n 1)"
+
+      - name: Validate VST3 (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: >
+          ./pluginval.exe --strictness-level 5 --validate
+          "$(find build -name 'PreDrop.vst3' | head -n 1)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PreDrop-${{ runner.os }}
+          path: |
+            build/PreDrop_artefacts/**/PreDrop.vst3
+            build/PreDrop_artefacts/**/PreDrop.component
+            build/PreDrop_artefacts/**/Pre Drop.app
+          if-no-files-found: ignore

@@ -1,0 +1,19 @@
+# Build output
+build/
+cmake-build-*/
+out/
+
+# Coverage report generated in CI (gcovr --sonarqube)
+coverage.xml
+
+# IDE / editor
+.vscode/
+.idea/
+*.user
+*.swp
+
+# macOS
+.DS_Store
+
+# Vendored JUCE (if pulled locally outside FetchContent)
+JUCE/
