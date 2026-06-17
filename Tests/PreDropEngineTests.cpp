@@ -8,6 +8,7 @@
 */
 
 #include "PreDropEngine.h"
+#include "PreDropVisualModel.h"
 
 #include <cmath>
 #include <cstdio>
@@ -144,6 +145,29 @@ void testStabilityAtFull()
     check (finite,      "output stays finite (no NaN/Inf) under sustained input at full");
     check (peak < 8.0f, "output stays bounded (feedback does not run away)");
 }
+
+// ---- Test 4: the editor's visual model stays in lock-step with the DSP. --------
+void testVisualModelMatchesEngine()
+{
+    std::printf ("Visual model <-> engine coupling:\n");
+
+    bool cutoffMatches = true;
+    for (int i = 0; i <= 100; ++i)
+    {
+        const float a = (float) i / 100.0f;
+        cutoffMatches = cutoffMatches
+                     && approx (PreDropVisualModel::cutoffHz (a), PreDropEngine::mapMacro (a).hpfCutoffHz, 0.5f);
+    }
+    check (cutoffMatches, "editor cutoff readout matches the engine HPF cutoff across the macro");
+
+    // The chips' engaged flags must line up with the engine's effects switching on.
+    check (PreDropEngine::mapMacro (0.19f).reverbWet  <= 0.0f && ! PreDropVisualModel::reverbEngaged (0.19f), "reverb idle below 20% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.21f).reverbWet  >  0.0f &&   PreDropVisualModel::reverbEngaged (0.21f), "reverb engaged above 20% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.39f).delayWet   <= 0.0f && ! PreDropVisualModel::delayEngaged  (0.39f), "delay idle below 40% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.41f).delayWet   >  0.0f &&   PreDropVisualModel::delayEngaged  (0.41f), "delay engaged above 40% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.59f).riserLevel <= 0.0f && ! PreDropVisualModel::riserEngaged  (0.59f), "riser idle below 60% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.61f).riserLevel >  0.0f &&   PreDropVisualModel::riserEngaged  (0.61f), "riser engaged above 60% in both UI and DSP");
+}
 } // namespace
 
 int main()
@@ -153,6 +177,7 @@ int main()
     testMappingBoundaries();
     testNearPassthroughAtZero();
     testStabilityAtFull();
+    testVisualModelMatchesEngine();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;
