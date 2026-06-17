@@ -47,7 +47,8 @@ juce_generate_juce_header(PreDrop)
 
 target_sources(PreDrop PRIVATE
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/PreDropLookAndFeel.cpp)
 
 target_compile_definitions(PreDrop
     PUBLIC
@@ -90,10 +91,22 @@ if(PREDROP_BUILD_TESTS)
 
     # Coverage instrumentation for the DSP core, fed to SonarQube from CI. Only
     # the test target is instrumented, and -O0 keeps gcov's line mapping honest.
-    if(PREDROP_ENABLE_COVERAGE)
+    if(PREDROP_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(PreDropTests PRIVATE --coverage -O0 -g)
         target_link_options(PreDropTests PRIVATE --coverage)
     endif()
 
     add_test(NAME PreDropEngine COMMAND PreDropTests)
+
+    # The editor's numeric model is pure and framework-free, so it gets its own
+    # tiny test target with no JUCE dependency at all.
+    add_executable(PreDropVisualModelTests Tests/PreDropVisualModelTests.cpp)
+    target_include_directories(PreDropVisualModelTests PRIVATE Source)
+
+    if(PREDROP_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(PreDropVisualModelTests PRIVATE --coverage -O0 -g)
+        target_link_options(PreDropVisualModelTests PRIVATE --coverage)
+    endif()
+
+    add_test(NAME PreDropVisualModel COMMAND PreDropVisualModelTests)
 endif()

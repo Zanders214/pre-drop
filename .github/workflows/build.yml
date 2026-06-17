@@ -84,27 +84,28 @@ jobs:
         run: >
           xvfb-run --auto-servernum
           ./pluginval --strictness-level 5 --validate
-          $(find build -name 'PreDrop.vst3' -type d | head -n 1)
+          "$(find build -name '*.vst3' -type d | head -n 1)"
 
       - name: Validate VST3 (macOS)
         if: runner.os == 'macOS'
         run: >
           ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate
-          "$(find build -name 'PreDrop.vst3' | head -n 1)"
+          "$(find build -name '*.vst3' -type d | head -n 1)"
 
       - name: Validate VST3 (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: >
           ./pluginval.exe --strictness-level 5 --validate
-          "$(find build -name 'PreDrop.vst3' | head -n 1)"
+          "$(find build -name '*.vst3' -type d | head -n 1)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: PreDrop-${{ runner.os }}
           path: |
-            build/PreDrop_artefacts/**/PreDrop.vst3
-            build/PreDrop_artefacts/**/PreDrop.component
-            build/PreDrop_artefacts/**/Pre Drop.app
+            build/PreDrop_artefacts/**/*.vst3
+            build/PreDrop_artefacts/**/*.component
+            build/PreDrop_artefacts/**/*.app
+            build/PreDrop_artefacts/**/Standalone/*.exe
           if-no-files-found: ignore
