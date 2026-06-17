@@ -1,5 +1,7 @@
 # Pre Drop
 
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tape-stop_pre-drop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tape-stop_pre-drop)
+
 A one-knob "build-up" effect plugin for DAWs (VST3 / AU / Standalone), built with
 [JUCE](https://juce.com). Turn a steady loop into the tension before a drop with a
 single macro: as **Amount** rises, the plugin progressively cuts the low end, swells
