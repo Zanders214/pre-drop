@@ -33,7 +33,7 @@ juce_add_plugin(PreDrop
     PLUGIN_MANUFACTURER_CODE    Zand
     PLUGIN_CODE                 Pdrp
     FORMATS                     VST3 AU Standalone
-    PRODUCT_NAME                "Pre Drop"
+    PRODUCT_NAME                "ZandersPreDrop"
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
     NEEDS_MIDI_OUTPUT           FALSE

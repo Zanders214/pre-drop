@@ -36,8 +36,14 @@ struct PreDropVisualModel
     static float delayProgress  (float a) noexcept { return window (a, 0.40f, 1.0f); }
     static float riserProgress  (float a) noexcept { const float s = window (a, 0.60f, 1.0f); return s * s; }
 
-    /** Displayed high-pass cutoff in Hz: 20 -> 800, log-swept. Equals mapMacro's hpfCutoffHz. */
-    static float cutoffHz (float a) noexcept { return 20.0f * std::pow (40.0f, hpfProgress (a)); }
+    /** Displayed high-pass cutoff in Hz: 20 -> (20..800), log-swept. Equals
+        mapMacro's hpfCutoffHz. hpfDepth scales the top of the sweep (default 1
+        -> 800 Hz) so the chip readout tracks the HPF depth control. */
+    static float cutoffHz (float a, float hpfDepth = 1.0f) noexcept
+    {
+        const float topHz = 20.0f + (800.0f - 20.0f) * clamp01 (hpfDepth);
+        return 20.0f * std::pow (topHz / 20.0f, hpfProgress (a));
+    }
 
     // --- Engagement thresholds, for chip opacity (engaged vs idle). -------------
     static bool reverbEngaged (float a) noexcept { return a >= 0.20f; }

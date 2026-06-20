@@ -42,36 +42,60 @@ public:
         float riserCutoffHz = 200.0f;  // band-pass centre of the riser
     };
 
+    /** Per-effect depth (0..1) scaling how strong each effect gets at full tilt.
+
+        These are independent of the Amount macro, which still owns the build-up
+        *timing* (engagement windows). A depth of 1 reproduces the original fixed
+        mapping; lowering one pulls that single effect back without touching the
+        others. They default to 1 so the engine is unchanged until a user dials. */
+    struct Depths
+    {
+        float hpf    = 1.0f;   // scales the top of the HPF cutoff sweep
+        float reverb = 1.0f;   // scales the reverb wet maximum
+        float delay  = 1.0f;   // scales the delay wet maximum
+        float riser  = 1.0f;   // scales the riser level maximum
+    };
+
     /** Local 0..1 progress of m inside [lo, hi], clamped. */
     static float window (float m, float lo, float hi) noexcept
     {
         return juce::jlimit (0.0f, 1.0f, (m - lo) / (hi - lo));
     }
 
-    /** Pure macro -> targets mapping. No state, so it is trivially unit-testable. */
-    static Targets mapMacro (float amount) noexcept
+    /** Pure macro -> targets mapping with every effect at full depth. */
+    static Targets mapMacro (float amount) noexcept { return mapMacro (amount, Depths {}); }
+
+    /** Pure macro -> targets mapping. No state, so it is trivially unit-testable.
+
+        A default argument can't be used here: Depths is a nested type and its
+        default member initialisers aren't available in this member's default
+        argument, so the no-depth overload above delegates from its body. */
+    static Targets mapMacro (float amount, Depths depth) noexcept
     {
         const float m = juce::jlimit (0.0f, 1.0f, amount);
         Targets t;
 
         // 1. High-pass: always engaged, exponential cutoff with a slow start.
-        const float h = std::pow (window (m, 0.0f, 1.0f), 1.5f);
-        t.hpfCutoffHz = 20.0f * std::pow (800.0f / 20.0f, h);          // 20 -> 800 Hz
+        //    Depth scales the top of the sweep: depth=1 -> 800 Hz (original),
+        //    depth=0 -> stays at 20 Hz so the low-cut is effectively off.
+        const float h     = std::pow (window (m, 0.0f, 1.0f), 1.5f);
+        const float topHz = 20.0f + (800.0f - 20.0f) * juce::jlimit (0.0f, 1.0f, depth.hpf);
+        t.hpfCutoffHz = 20.0f * std::pow (topHz / 20.0f, h);          // 20 -> (20..800) Hz
 
         // 2. Reverb: engages at 20%.
         const float r = window (m, 0.20f, 1.0f);
-        t.reverbWet  = 0.60f * r;
+        t.reverbWet  = 0.60f * r * juce::jlimit (0.0f, 1.0f, depth.reverb);
         t.reverbSize = 0.30f + 0.65f * r;
 
         // 3. Delay: engages at 40%, feedback clamped for stability.
         const float d = window (m, 0.40f, 1.0f);
-        t.delayWet      = 0.50f * d;
+        t.delayWet      = 0.50f * d * juce::jlimit (0.0f, 1.0f, depth.delay);
         t.delayFeedback = std::min (0.85f * d, 0.95f);
 
         // 4. Riser: engages at 60% with a sharp late surge.
         const float s = window (m, 0.60f, 1.0f);
         const float sCurve = s * s;
-        t.riserLevel    = 0.70f * sCurve;
+        t.riserLevel    = 0.70f * sCurve * juce::jlimit (0.0f, 1.0f, depth.riser);
         t.riserCutoffHz = 200.0f * std::pow (8000.0f / 200.0f, s);     // 200 -> 8k Hz
 
         return t;
@@ -114,7 +138,7 @@ public:
         trimSm       .reset (sampleRate, ramp);
 
         // Snap smoothers to the current targets so the first block does not sweep.
-        const Targets t = mapMacro (amount);
+        const Targets t = mapMacro (amount, depths);
         hpfCutoffSm  .setCurrentAndTargetValue (t.hpfCutoffHz);
         reverbWetSm  .setCurrentAndTargetValue (t.reverbWet);
         reverbSizeSm .setCurrentAndTargetValue (t.reverbSize);
@@ -140,6 +164,11 @@ public:
     void setMix          (float newMix)    noexcept { mix          = newMix; }
     void setOutputTrimDb (float db)        noexcept { outputTrimDb = db; }
 
+    void setReverbDepth (float d) noexcept { depths.reverb = d; }
+    void setDelayDepth  (float d) noexcept { depths.delay  = d; }
+    void setRiserDepth  (float d) noexcept { depths.riser  = d; }
+    void setHpfDepth    (float d) noexcept { depths.hpf    = d; }
+
     void process (juce::AudioBuffer<float>& buffer)
     {
         const int numSamples = buffer.getNumSamples();
@@ -152,7 +181,7 @@ public:
         for (int ch = 0; ch < channels; ++ch)
             dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
-        const Targets t = mapMacro (amount);
+        const Targets t = mapMacro (amount, depths);
         hpfCutoffSm  .setTargetValue (t.hpfCutoffHz);
         reverbWetSm  .setTargetValue (t.reverbWet);
         reverbSizeSm .setTargetValue (t.reverbSize);
@@ -246,6 +275,7 @@ private:
     float amount       = 0.0f;
     float mix          = 1.0f;
     float outputTrimDb = 0.0f;
+    Depths depths;
 
     const double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
 

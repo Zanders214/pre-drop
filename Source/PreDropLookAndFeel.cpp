@@ -207,3 +207,137 @@ void PreDropLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     g.setColour (Palette::textStrong);
     g.fillEllipse (juce::Rectangle<float> (thumbRadius * 2.0f, thumbRadius * 2.0f).withCentre (thumb));
 }
+
+void PreDropLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                                               const juce::Colour&, bool shouldDrawButtonAsHighlighted,
+                                               bool shouldDrawButtonAsDown)
+{
+    const float s      = uiScale;
+    const auto  bounds = button.getLocalBounds().toFloat().reduced (juce::jmax (0.5f, s));
+    const float radius = 10.0f * s;                 // --radius-button
+    const float line   = juce::jmax (1.0f, s);
+    const bool  on     = button.getToggleState();
+
+    juce::Path pill;
+    pill.addRoundedRectangle (bounds, radius);
+
+    if (on)
+    {
+        // Engaged: accent gradient fill (#5e93ff -> #8b7bff) + outer accent glow.
+        juce::DropShadow (Palette::badge.withAlpha (0.55f), (int) (22.0f * s), {})
+            .drawForPath (g, pill);
+
+        juce::ColourGradient grad (Palette::badge, bounds.getX(), bounds.getY(),
+                                   Palette::violet, bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill (grad);
+        g.fillPath (pill);
+
+        g.setColour (juce::Colour::fromFloatRGBA (0.59f, 0.67f, 1.0f, 0.6f)); // accent border
+        g.strokePath (pill, juce::PathStrokeType (line));
+    }
+    else
+    {
+        // Idle: flat white-alpha fill (--layer-2) + hairline border (--layer-5).
+        const float fill = shouldDrawButtonAsDown ? 0.10f
+                          : shouldDrawButtonAsHighlighted ? 0.08f : 0.06f;
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, fill));
+        g.fillPath (pill);
+
+        // --inset-top highlight line.
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, 0.06f));
+        g.drawLine (bounds.getX() + radius, bounds.getY() + line,
+                    bounds.getRight() - radius, bounds.getY() + line, line);
+
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, 0.12f));
+        g.strokePath (pill, juce::PathStrokeType (line));
+    }
+}
+
+void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                                         bool, bool)
+{
+    // GlowButton language: a small square status dot + caption, centred together.
+    const float s    = uiScale;
+    const bool  on   = button.getToggleState();
+    const auto  area = button.getLocalBounds().toFloat();
+
+    const auto  font = Fonts::sans (10.0f * s, true, 0.16f);   // bold, --tracking-cap
+    const juce::String text = button.getButtonText();
+    const float tw   = textWidth (font, text);
+    const float dot  = 6.0f * s;
+    const float gap  = 6.0f * s;
+    const float xL   = area.getCentreX() - (dot + gap + tw) * 0.5f;
+    const float cy   = area.getCentreY();
+
+    const juce::Colour dotCol  = on ? juce::Colours::white : Palette::textStrong;
+    const juce::Colour glowCol = on ? juce::Colours::white : Palette::badge;
+
+    juce::Rectangle<float> dotRect (xL, cy - dot * 0.5f, dot, dot);
+    juce::Path dotPath;
+    dotPath.addRoundedRectangle (dotRect, 1.5f * s);
+    juce::DropShadow (glowCol.withAlpha (on ? 0.9f : 0.6f), (int) (8.0f * s), {})
+        .drawForPath (g, dotPath);
+    g.setColour (dotCol);
+    g.fillRoundedRectangle (dotRect, 1.5f * s);
+
+    g.setFont (font);
+    g.setColour (on ? juce::Colours::white : Palette::textStrong);
+    g.drawText (text, juce::Rectangle<float> (xL + dot + gap, area.getY(), tw + 2.0f * s, area.getHeight()),
+                juce::Justification::centredLeft, false);
+}
+
+void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                                             float sliderPosProportional, float rotaryStartAngle,
+                                             float rotaryEndAngle, juce::Slider& slider)
+{
+    const float s = uiScale;
+    const juce::Point<float> centre ((float) x + (float) width * 0.5f,
+                                     (float) y + (float) height * 0.5f);
+
+    const float ringRadius = juce::jmin ((float) width, (float) height) * 0.5f - 3.0f * s;
+    const float ringThick  = 3.5f * s;
+    const float amount     = juce::jlimit (0.0f, 1.0f, sliderPosProportional);
+    const float curAngle   = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * amount;
+
+    const juce::Colour accent = slider.findColour (juce::Slider::rotarySliderFillColourId);
+
+    // --- Recessed disc behind the arc (Dial's rgba(8,11,18,0.6) seat) --------
+    g.setColour (juce::Colour::fromFloatRGBA (0.031f, 0.043f, 0.071f, 0.6f));
+    g.fillEllipse (juce::Rectangle<float> (ringRadius * 2.0f, ringRadius * 2.0f).withCentre (centre));
+
+    // --- Track arc (full sweep) ---------------------------------------------
+    {
+        juce::Path track;
+        track.addCentredArc (centre.x, centre.y, ringRadius, ringRadius, 0.0f,
+                             rotaryStartAngle, rotaryEndAngle, true);
+        g.setColour (Palette::ringTrack);
+        g.strokePath (track, juce::PathStrokeType (ringThick, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+    // --- Value arc in the effect colour, with a glow that scales with value --
+    if (amount > 0.0005f)
+    {
+        juce::Path value;
+        value.addCentredArc (centre.x, centre.y, ringRadius, ringRadius, 0.0f,
+                             rotaryStartAngle, curAngle, true);
+        const float glow = (3.0f + amount * 6.0f) * s;   // ~ drop-shadow(0 0 3+v*6)
+        g.setColour (accent.withAlpha (0.25f));
+        g.strokePath (value, juce::PathStrokeType (ringThick + glow, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+        g.setColour (accent);
+        g.strokePath (value, juce::PathStrokeType (ringThick, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+    // --- Filled core that scales + glows with value (no body, no pointer) ----
+    {
+        const float coreRadius = (4.0f + amount * 5.0f) * s;   // Dial: r = 4 + value*5
+        const auto  coreBounds = juce::Rectangle<float> (coreRadius * 2.0f, coreRadius * 2.0f).withCentre (centre);
+        juce::Path corePath;
+        corePath.addEllipse (coreBounds);
+        juce::DropShadow (accent.withAlpha (0.9f), (int) (6.0f * s), {}).drawForPath (g, corePath);
+        g.setColour (accent);
+        g.fillEllipse (coreBounds);
+    }
+}
