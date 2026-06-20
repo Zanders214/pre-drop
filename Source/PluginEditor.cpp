@@ -219,24 +219,29 @@ void PreDropAudioProcessorEditor::paintDepthPanel (juce::Graphics& g, float s)
     g.setColour (Palette::chipSurface);
     g.fillRoundedRectangle (panel, 12.0f * s);
 
-    const auto nameFont  = Fonts::sans (9.0f * s, true, 0.08f);
+    // Dial convention: name + mono value stacked *beneath* the arc — the name in
+    // grey (--text-2), the value in the dial's own effect colour.
+    const auto nameFont  = Fonts::sans (10.0f * s, true, 0.10f);   // --tracking-data
     const auto valueFont = Fonts::mono (10.0f * s);
 
     for (int i = 0; i < numDepths; ++i)
     {
-        const auto col   = depthKnobAreas[i].toFloat();
-        const float value = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
+        const auto  col    = depthKnobAreas[i].toFloat();
+        const auto  dial   = depthSliders[i].getBounds().toFloat();
+        const float value  = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
+        const float textTop = dial.getBottom() + 2.0f * s;
 
         g.setFont (nameFont);
-        g.setColour (depthColour (i).withAlpha (0.85f));
-        g.drawText (depthNames[i], col.withHeight (12.0f * s),
+        g.setColour (Palette::textMid);
+        g.drawText (depthNames[i],
+                    juce::Rectangle<float> (col.getX(), textTop, col.getWidth(), 12.0f * s),
                     juce::Justification::centredTop, false);
 
         g.setFont (valueFont);
-        g.setColour (Palette::textMid);
+        g.setColour (depthColour (i));
         g.drawText (Format::percent (value),
-                    col.withTop (col.getBottom() - 13.0f * s),
-                    juce::Justification::centredBottom, false);
+                    juce::Rectangle<float> (col.getX(), textTop + 12.0f * s, col.getWidth(), 13.0f * s),
+                    juce::Justification::centredTop, false);
     }
 }
 
@@ -316,18 +321,23 @@ void PreDropAudioProcessorEditor::resized()
     // that the build-up curve and the depth panel share.
     area.removeFromTop (px (8.0f));
     auto buttonRow = area.removeFromTop (px (18.0f));
-    effectsButton.setBounds (buttonRow.removeFromRight (px (74.0f)));
+    effectsButton.setBounds (buttonRow.removeFromRight (px (84.0f)));
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
     revealArea = area.removeFromTop (px (114.0f));
     buildUpCurve.setBounds (revealArea);
 
-    // Lay out the four depth knobs across the reveal slot (used when open).
+    // Lay out the four depth dials across the reveal slot (used when open): each
+    // column is an arc on top with its name + value stacked beneath it.
     {
-        auto knobs = revealArea.reduced (px (8.0f), px (6.0f));
-        const int kGap = px (10.0f);
-        const int colW = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
-        const int knobSize = juce::jmin (colW, knobs.getHeight() - px (28.0f));
+        auto knobs = revealArea.reduced (px (8.0f), px (8.0f));
+        const int kGap      = px (10.0f);
+        const int colW      = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
+        const int textBlock = px (26.0f);                  // name + value lines
+        const int dialSize  = juce::jmin (colW, knobs.getHeight() - textBlock);
+
+        // Vertically centre the dial + text block within the slot.
+        knobs.removeFromTop (juce::jmax (0, (knobs.getHeight() - (dialSize + textBlock)) / 2));
 
         for (int i = 0; i < numDepths; ++i)
         {
@@ -335,9 +345,9 @@ void PreDropAudioProcessorEditor::resized()
             if (i < numDepths - 1)
                 knobs.removeFromLeft (kGap);
 
-            depthKnobAreas[i] = col;
-            auto knobBand = col.reduced (0, px (14.0f));   // leave name above / value below
-            depthSliders[i].setBounds (knobBand.withSizeKeepingCentre (knobSize, knobSize));
+            depthKnobAreas[i] = col;                        // full column for name/value paint
+            depthSliders[i].setBounds (col.removeFromTop (dialSize)
+                                          .withSizeKeepingCentre (dialSize, dialSize));
         }
     }
 

@@ -214,25 +214,76 @@ void PreDropLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
 {
     const float s      = uiScale;
     const auto  bounds = button.getLocalBounds().toFloat().reduced (juce::jmax (0.5f, s));
-    const float radius = juce::jmin (bounds.getHeight() * 0.5f, 20.0f * s);
+    const float radius = 10.0f * s;                 // --radius-button
+    const float line   = juce::jmax (1.0f, s);
     const bool  on     = button.getToggleState();
 
-    // Filled when active, hollow when idle — echoes the BUILD-UP pill.
-    const float fillAlpha = on ? 0.22f : (shouldDrawButtonAsDown ? 0.16f
-                                          : shouldDrawButtonAsHighlighted ? 0.12f : 0.08f);
-    g.setColour (Palette::badge.withAlpha (fillAlpha));
-    g.fillRoundedRectangle (bounds, radius);
+    juce::Path pill;
+    pill.addRoundedRectangle (bounds, radius);
 
-    g.setColour (Palette::badge.withAlpha (on ? 0.9f : 0.35f));
-    g.drawRoundedRectangle (bounds, radius, juce::jmax (1.0f, s));
+    if (on)
+    {
+        // Engaged: accent gradient fill (#5e93ff -> #8b7bff) + outer accent glow.
+        juce::DropShadow (Palette::badge.withAlpha (0.55f), (int) (22.0f * s), {})
+            .drawForPath (g, pill);
+
+        juce::ColourGradient grad (Palette::badge, bounds.getX(), bounds.getY(),
+                                   Palette::violet, bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill (grad);
+        g.fillPath (pill);
+
+        g.setColour (juce::Colour::fromFloatRGBA (0.59f, 0.67f, 1.0f, 0.6f)); // accent border
+        g.strokePath (pill, juce::PathStrokeType (line));
+    }
+    else
+    {
+        // Idle: flat white-alpha fill (--layer-2) + hairline border (--layer-5).
+        const float fill = shouldDrawButtonAsDown ? 0.10f
+                          : shouldDrawButtonAsHighlighted ? 0.08f : 0.06f;
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, fill));
+        g.fillPath (pill);
+
+        // --inset-top highlight line.
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, 0.06f));
+        g.drawLine (bounds.getX() + radius, bounds.getY() + line,
+                    bounds.getRight() - radius, bounds.getY() + line, line);
+
+        g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, 0.12f));
+        g.strokePath (pill, juce::PathStrokeType (line));
+    }
 }
 
 void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button,
                                          bool, bool)
 {
-    g.setFont (Fonts::sans (10.0f * uiScale, true, 0.14f));
-    g.setColour (Palette::badge.withAlpha (button.getToggleState() ? 1.0f : 0.7f));
-    g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
+    // GlowButton language: a small square status dot + caption, centred together.
+    const float s    = uiScale;
+    const bool  on   = button.getToggleState();
+    const auto  area = button.getLocalBounds().toFloat();
+
+    const auto  font = Fonts::sans (10.0f * s, true, 0.16f);   // bold, --tracking-cap
+    const juce::String text = button.getButtonText();
+    const float tw   = textWidth (font, text);
+    const float dot  = 6.0f * s;
+    const float gap  = 6.0f * s;
+    const float xL   = area.getCentreX() - (dot + gap + tw) * 0.5f;
+    const float cy   = area.getCentreY();
+
+    const juce::Colour dotCol  = on ? juce::Colours::white : Palette::textStrong;
+    const juce::Colour glowCol = on ? juce::Colours::white : Palette::badge;
+
+    juce::Rectangle<float> dotRect (xL, cy - dot * 0.5f, dot, dot);
+    juce::Path dotPath;
+    dotPath.addRoundedRectangle (dotRect, 1.5f * s);
+    juce::DropShadow (glowCol.withAlpha (on ? 0.9f : 0.6f), (int) (8.0f * s), {})
+        .drawForPath (g, dotPath);
+    g.setColour (dotCol);
+    g.fillRoundedRectangle (dotRect, 1.5f * s);
+
+    g.setFont (font);
+    g.setColour (on ? juce::Colours::white : Palette::textStrong);
+    g.drawText (text, juce::Rectangle<float> (xL + dot + gap, area.getY(), tw + 2.0f * s, area.getHeight()),
+                juce::Justification::centredLeft, false);
 }
 
 void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -250,6 +301,10 @@ void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, in
 
     const juce::Colour accent = slider.findColour (juce::Slider::rotarySliderFillColourId);
 
+    // --- Recessed disc behind the arc (Dial's rgba(8,11,18,0.6) seat) --------
+    g.setColour (juce::Colour::fromFloatRGBA (0.031f, 0.043f, 0.071f, 0.6f));
+    g.fillEllipse (juce::Rectangle<float> (ringRadius * 2.0f, ringRadius * 2.0f).withCentre (centre));
+
     // --- Track arc (full sweep) ---------------------------------------------
     {
         juce::Path track;
@@ -260,41 +315,29 @@ void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, in
                                                    juce::PathStrokeType::rounded));
     }
 
-    // --- Value arc (accent tinted) ------------------------------------------
+    // --- Value arc in the effect colour, with a glow that scales with value --
     if (amount > 0.0005f)
     {
         juce::Path value;
         value.addCentredArc (centre.x, centre.y, ringRadius, ringRadius, 0.0f,
                              rotaryStartAngle, curAngle, true);
-        g.setColour (accent.withAlpha (0.30f));
-        g.strokePath (value, juce::PathStrokeType (ringThick + 3.0f * s, juce::PathStrokeType::curved,
+        const float glow = (3.0f + amount * 6.0f) * s;   // ~ drop-shadow(0 0 3+v*6)
+        g.setColour (accent.withAlpha (0.25f));
+        g.strokePath (value, juce::PathStrokeType (ringThick + glow, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
         g.setColour (accent);
         g.strokePath (value, juce::PathStrokeType (ringThick, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
     }
 
-    // --- Inset body ----------------------------------------------------------
-    const float bodyRadius = ringRadius - 5.0f * s;
-    const auto  bodyBounds = juce::Rectangle<float> (bodyRadius * 2.0f, bodyRadius * 2.0f).withCentre (centre);
+    // --- Filled core that scales + glows with value (no body, no pointer) ----
     {
-        const juce::Point<float> hi (bodyBounds.getX() + 0.40f * bodyBounds.getWidth(),
-                                     bodyBounds.getY() + 0.30f * bodyBounds.getHeight());
-        juce::ColourGradient body (Palette::knobBodyHi, hi.x, hi.y,
-                                   Palette::knobBodyLo, centre.x, centre.y + bodyRadius, true);
-        g.setGradientFill (body);
-        g.fillEllipse (bodyBounds);
-        g.setColour (Palette::knobBorder);
-        g.drawEllipse (bodyBounds, juce::jmax (1.0f, 1.0f * s));
-    }
-
-    // --- Pointer dot ---------------------------------------------------------
-    {
-        const float dotRadius = 2.5f * s;
-        const float dotDist   = bodyRadius - 5.0f * s;
-        const juce::Point<float> dot (centre.x + dotDist * std::sin (curAngle),
-                                      centre.y - dotDist * std::cos (curAngle));
-        g.setColour (juce::Colours::white);
-        g.fillEllipse (juce::Rectangle<float> (dotRadius * 2.0f, dotRadius * 2.0f).withCentre (dot));
+        const float coreRadius = (4.0f + amount * 5.0f) * s;   // Dial: r = 4 + value*5
+        const auto  coreBounds = juce::Rectangle<float> (coreRadius * 2.0f, coreRadius * 2.0f).withCentre (centre);
+        juce::Path corePath;
+        corePath.addEllipse (coreBounds);
+        juce::DropShadow (accent.withAlpha (0.9f), (int) (6.0f * s), {}).drawForPath (g, corePath);
+        g.setColour (accent);
+        g.fillEllipse (coreBounds);
     }
 }
