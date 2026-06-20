@@ -66,6 +66,12 @@ void testCutoff()
     check (approx (M::cutoffHz (0.0f),  20.0f, 0.01f), "cutoff is 20 Hz at amount=0");
     check (approx (M::cutoffHz (1.0f), 800.0f, 0.5f),  "cutoff reaches 800 Hz at amount=1");
 
+    // HPF depth scales the top of the sweep, matching the engine's mapMacro.
+    check (approx (M::cutoffHz (1.0f, 1.0f), 800.0f, 0.5f), "depth 1 (default) tops out at 800 Hz");
+    check (approx (M::cutoffHz (1.0f, 0.0f),  20.0f, 0.01f), "depth 0 keeps the cutoff at 20 Hz");
+    check (M::cutoffHz (1.0f, 0.5f) < M::cutoffHz (1.0f, 1.0f),
+           "lowering HPF depth lowers the displayed cutoff");
+
     bool matchesEngine = true;
     for (int i = 0; i <= 100; ++i)
     {

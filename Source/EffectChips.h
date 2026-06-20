@@ -23,11 +23,13 @@ public:
     EffectChips() { setInterceptsMouseClicks (false, false); }
 
     std::function<float()> getAmount;
+    std::function<float()> getHpfDepth;   // optional; defaults to full depth
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
     void paint (juce::Graphics& g) override
     {
-        const float a = getAmount ? getAmount() : 0.0f;
+        const float a        = getAmount    ? getAmount()    : 0.0f;
+        const float hpfDepth = getHpfDepth  ? getHpfDepth()  : 1.0f;
         const float s = uiScale;
         const auto  bounds = getLocalBounds().toFloat();
 
@@ -45,7 +47,7 @@ public:
         const Chip chips[4] =
         {
             { "HPF", Palette::cyan,   juce::jmax (0.15f, PreDropVisualModel::hpfProgress (a)), true,
-              Format::hertz (PreDropVisualModel::cutoffHz (a)) },
+              Format::hertz (PreDropVisualModel::cutoffHz (a, hpfDepth)) },
             { "REV", Palette::violet, PreDropVisualModel::reverbProgress (a), PreDropVisualModel::reverbEngaged (a),
               Format::percent (PreDropVisualModel::reverbProgress (a)) },
             { "DLY", Palette::pink,   PreDropVisualModel::delayProgress (a),  PreDropVisualModel::delayEngaged (a),

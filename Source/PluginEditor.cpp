@@ -20,6 +20,17 @@ namespace
     }
 
     float amountOf (PreDropAudioProcessor& p) { return p.apvts.getRawParameterValue ("amount")->load(); }
+
+    // Per-effect depth knobs, in display order. IDs match PluginProcessor's
+    // ParamID namespace; colours match the effect chips.
+    const char* const depthParamIds[4] = { "reverbDepth", "delayDepth", "riserDepth", "hpfDepth" };
+    const char* const depthNames[4]    = { "REVERB", "DELAY", "RISER", "HIGH-PASS" };
+    juce::Colour depthColour (int i)
+    {
+        using namespace PreDrop::Palette;
+        const juce::Colour cols[4] = { violet, pink, amber, cyan };
+        return cols[juce::jlimit (0, 3, i)];
+    }
 }
 
 PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor& p)
@@ -48,8 +59,34 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
         addAndMakeVisible (*sl);
     }
 
+    // --- Per-effect depth knobs (hidden until the EFFECTS button is pressed) --
+    for (int i = 0; i < numDepths; ++i)
+    {
+        auto& sl = depthSliders[i];
+        sl.setSliderStyle (juce::Slider::RotaryVerticalDrag);
+        sl.setRotaryParameters (juce::degreesToRadians (-135.0f),
+                                juce::degreesToRadians (135.0f), true);
+        sl.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        sl.setColour (juce::Slider::rotarySliderFillColourId, depthColour (i));
+        sl.setLookAndFeel (&depthLnf);
+        const float def = p.apvts.getParameterRange (depthParamIds[i])
+                              .convertFrom0to1 (p.apvts.getParameter (depthParamIds[i])->getDefaultValue());
+        sl.setDoubleClickReturnValue (true, def);
+        sl.onValueChange = [this] { repaint(); };
+        addChildComponent (sl);   // added but not visible until the panel opens
+        depthAttachments[i] = std::make_unique<SliderAttachment> (p.apvts, depthParamIds[i], sl);
+    }
+
+    // --- EFFECTS reveal toggle -----------------------------------------------
+    effectsButton.setButtonText ("EFFECTS");
+    effectsButton.setClickingTogglesState (true);
+    effectsButton.setLookAndFeel (&lnf);
+    effectsButton.onClick = [this] { setDepthPanelOpen (effectsButton.getToggleState()); };
+    addAndMakeVisible (effectsButton);
+
     // --- Indicators ----------------------------------------------------------
-    effectChips.getAmount = [this] { return amountOf (processorRef); };
+    effectChips.getAmount   = [this] { return amountOf (processorRef); };
+    effectChips.getHpfDepth = [this] { return processorRef.apvts.getRawParameterValue ("hpfDepth")->load(); };
     addAndMakeVisible (effectChips);
     addAndMakeVisible (buildUpCurve);
 
@@ -79,6 +116,23 @@ PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
     amountSlider.setLookAndFeel (nullptr);
     mixSlider.setLookAndFeel (nullptr);
     trimSlider.setLookAndFeel (nullptr);
+    effectsButton.setLookAndFeel (nullptr);
+    for (auto& sl : depthSliders)
+        sl.setLookAndFeel (nullptr);
+}
+
+void PreDropAudioProcessorEditor::setDepthPanelOpen (bool shouldBeOpen)
+{
+    depthPanelOpen = shouldBeOpen;
+
+    // The depth knobs and the build-up curve share the same area, so swap which
+    // one occupies it. The chips stay live in both states.
+    buildUpCurve.setVisible (! shouldBeOpen);
+    for (auto& sl : depthSliders)
+        sl.setVisible (shouldBeOpen);
+
+    resized();
+    repaint();
 }
 
 void PreDropAudioProcessorEditor::timerCallback()
@@ -87,9 +141,23 @@ void PreDropAudioProcessorEditor::timerCallback()
     const float m = processorRef.apvts.getRawParameterValue ("mix")->load();
     const float t = processorRef.apvts.getRawParameterValue ("outputTrim")->load();
 
-    if (std::abs (a - lastAmount) > 1.0e-4f
-        || std::abs (m - lastMix) > 1.0e-4f
-        || std::abs (t - lastTrim) > 1.0e-3f)
+    bool changed = std::abs (a - lastAmount) > 1.0e-4f
+                || std::abs (m - lastMix) > 1.0e-4f
+                || std::abs (t - lastTrim) > 1.0e-3f;
+
+    // The HPF chip readout depends on the HPF depth even when the panel is shut,
+    // and the panel's painted percent labels need refreshing while it is open.
+    for (int i = 0; i < numDepths; ++i)
+    {
+        const float d = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
+        if (std::abs (d - lastDepths[i]) > 1.0e-4f)
+        {
+            lastDepths[i] = d;
+            changed = true;
+        }
+    }
+
+    if (changed)
     {
         lastAmount = a;
         lastMix    = m;
@@ -137,6 +205,39 @@ void PreDropAudioProcessorEditor::paint (juce::Graphics& g)
                                         w - 2.0f * kPanelPad * s, juce::jmax (1.0f, s)));
 
     paintSliderLabels (g, s);
+
+    if (depthPanelOpen)
+        paintDepthPanel (g, s);
+}
+
+void PreDropAudioProcessorEditor::paintDepthPanel (juce::Graphics& g, float s)
+{
+    using namespace PreDrop;
+
+    // Soft backing so the knobs read as a grouped panel over the curve's slot.
+    const auto panel = revealArea.toFloat();
+    g.setColour (Palette::chipSurface);
+    g.fillRoundedRectangle (panel, 12.0f * s);
+
+    const auto nameFont  = Fonts::sans (9.0f * s, true, 0.08f);
+    const auto valueFont = Fonts::mono (10.0f * s);
+
+    for (int i = 0; i < numDepths; ++i)
+    {
+        const auto col   = depthKnobAreas[i].toFloat();
+        const float value = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
+
+        g.setFont (nameFont);
+        g.setColour (depthColour (i).withAlpha (0.85f));
+        g.drawText (depthNames[i], col.withHeight (12.0f * s),
+                    juce::Justification::centredTop, false);
+
+        g.setFont (valueFont);
+        g.setColour (Palette::textMid);
+        g.drawText (Format::percent (value),
+                    col.withTop (col.getBottom() - 13.0f * s),
+                    juce::Justification::centredBottom, false);
+    }
 }
 
 void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s)
@@ -196,6 +297,7 @@ void PreDropAudioProcessorEditor::resized()
     const auto px = [s] (float v) { return (int) std::round (v * s); };
 
     lnf.setUiScale (s);
+    depthLnf.setUiScale (s);
     effectChips.setUiScale (s);
     buildUpCurve.setUiScale (s);
 
@@ -210,8 +312,34 @@ void PreDropAudioProcessorEditor::resized()
     area.removeFromTop (px (16.0f));                       // gap before chips
     effectChips.setBounds (area.removeFromTop (px (40.0f)));
 
-    area.removeFromTop (px (20.0f));                       // gap before curve
-    buildUpCurve.setBounds (area.removeFromTop (px (126.0f)));
+    // A slim row holds the EFFECTS reveal toggle, right-aligned above the slot
+    // that the build-up curve and the depth panel share.
+    area.removeFromTop (px (8.0f));
+    auto buttonRow = area.removeFromTop (px (18.0f));
+    effectsButton.setBounds (buttonRow.removeFromRight (px (74.0f)));
+
+    area.removeFromTop (px (6.0f));                        // gap before reveal slot
+    revealArea = area.removeFromTop (px (114.0f));
+    buildUpCurve.setBounds (revealArea);
+
+    // Lay out the four depth knobs across the reveal slot (used when open).
+    {
+        auto knobs = revealArea.reduced (px (8.0f), px (6.0f));
+        const int kGap = px (10.0f);
+        const int colW = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
+        const int knobSize = juce::jmin (colW, knobs.getHeight() - px (28.0f));
+
+        for (int i = 0; i < numDepths; ++i)
+        {
+            auto col = knobs.removeFromLeft (colW);
+            if (i < numDepths - 1)
+                knobs.removeFromLeft (kGap);
+
+            depthKnobAreas[i] = col;
+            auto knobBand = col.reduced (0, px (14.0f));   // leave name above / value below
+            depthSliders[i].setBounds (knobBand.withSizeKeepingCentre (knobSize, knobSize));
+        }
+    }
 
     area.removeFromTop (px (20.0f));                       // gap before slider section
     sliderSeparatorY = area.getY();

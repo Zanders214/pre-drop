@@ -207,3 +207,94 @@ void PreDropLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     g.setColour (Palette::textStrong);
     g.fillEllipse (juce::Rectangle<float> (thumbRadius * 2.0f, thumbRadius * 2.0f).withCentre (thumb));
 }
+
+void PreDropLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                                               const juce::Colour&, bool shouldDrawButtonAsHighlighted,
+                                               bool shouldDrawButtonAsDown)
+{
+    const float s      = uiScale;
+    const auto  bounds = button.getLocalBounds().toFloat().reduced (juce::jmax (0.5f, s));
+    const float radius = juce::jmin (bounds.getHeight() * 0.5f, 20.0f * s);
+    const bool  on     = button.getToggleState();
+
+    // Filled when active, hollow when idle — echoes the BUILD-UP pill.
+    const float fillAlpha = on ? 0.22f : (shouldDrawButtonAsDown ? 0.16f
+                                          : shouldDrawButtonAsHighlighted ? 0.12f : 0.08f);
+    g.setColour (Palette::badge.withAlpha (fillAlpha));
+    g.fillRoundedRectangle (bounds, radius);
+
+    g.setColour (Palette::badge.withAlpha (on ? 0.9f : 0.35f));
+    g.drawRoundedRectangle (bounds, radius, juce::jmax (1.0f, s));
+}
+
+void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                                         bool, bool)
+{
+    g.setFont (Fonts::sans (10.0f * uiScale, true, 0.14f));
+    g.setColour (Palette::badge.withAlpha (button.getToggleState() ? 1.0f : 0.7f));
+    g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centred, false);
+}
+
+void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                                             float sliderPosProportional, float rotaryStartAngle,
+                                             float rotaryEndAngle, juce::Slider& slider)
+{
+    const float s = uiScale;
+    const juce::Point<float> centre ((float) x + (float) width * 0.5f,
+                                     (float) y + (float) height * 0.5f);
+
+    const float ringRadius = juce::jmin ((float) width, (float) height) * 0.5f - 3.0f * s;
+    const float ringThick  = 3.5f * s;
+    const float amount     = juce::jlimit (0.0f, 1.0f, sliderPosProportional);
+    const float curAngle   = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * amount;
+
+    const juce::Colour accent = slider.findColour (juce::Slider::rotarySliderFillColourId);
+
+    // --- Track arc (full sweep) ---------------------------------------------
+    {
+        juce::Path track;
+        track.addCentredArc (centre.x, centre.y, ringRadius, ringRadius, 0.0f,
+                             rotaryStartAngle, rotaryEndAngle, true);
+        g.setColour (Palette::ringTrack);
+        g.strokePath (track, juce::PathStrokeType (ringThick, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+    // --- Value arc (accent tinted) ------------------------------------------
+    if (amount > 0.0005f)
+    {
+        juce::Path value;
+        value.addCentredArc (centre.x, centre.y, ringRadius, ringRadius, 0.0f,
+                             rotaryStartAngle, curAngle, true);
+        g.setColour (accent.withAlpha (0.30f));
+        g.strokePath (value, juce::PathStrokeType (ringThick + 3.0f * s, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+        g.setColour (accent);
+        g.strokePath (value, juce::PathStrokeType (ringThick, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+    // --- Inset body ----------------------------------------------------------
+    const float bodyRadius = ringRadius - 5.0f * s;
+    const auto  bodyBounds = juce::Rectangle<float> (bodyRadius * 2.0f, bodyRadius * 2.0f).withCentre (centre);
+    {
+        const juce::Point<float> hi (bodyBounds.getX() + 0.40f * bodyBounds.getWidth(),
+                                     bodyBounds.getY() + 0.30f * bodyBounds.getHeight());
+        juce::ColourGradient body (Palette::knobBodyHi, hi.x, hi.y,
+                                   Palette::knobBodyLo, centre.x, centre.y + bodyRadius, true);
+        g.setGradientFill (body);
+        g.fillEllipse (bodyBounds);
+        g.setColour (Palette::knobBorder);
+        g.drawEllipse (bodyBounds, juce::jmax (1.0f, 1.0f * s));
+    }
+
+    // --- Pointer dot ---------------------------------------------------------
+    {
+        const float dotRadius = 2.5f * s;
+        const float dotDist   = bodyRadius - 5.0f * s;
+        const juce::Point<float> dot (centre.x + dotDist * std::sin (curAngle),
+                                      centre.y - dotDist * std::cos (curAngle));
+        g.setColour (juce::Colours::white);
+        g.fillEllipse (juce::Rectangle<float> (dotRadius * 2.0f, dotRadius * 2.0f).withCentre (dot));
+    }
+}
