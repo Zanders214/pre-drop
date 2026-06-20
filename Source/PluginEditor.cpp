@@ -249,9 +249,18 @@ void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s)
 {
     const auto area = headerArea.toFloat();
 
-    g.setFont (Fonts::sans (16.0f * s, true));
+    // Wordmark: house brand "Zanders" in primary text, tight against the pink
+    // product name — CamelCase, no space, per the design-system Wordmark.
+    const auto wordmarkFont = Fonts::sans (16.0f * s, true, -0.01f);   // --tracking-title
+    g.setFont (wordmarkFont);
+
+    const juce::String house ("Zanders");
     g.setColour (Palette::textStrong);
-    g.drawText ("Pre-Drop", area, juce::Justification::centredLeft, false);
+    g.drawText (house, area, juce::Justification::centredLeft, false);
+
+    g.setColour (Palette::pink);
+    g.drawText ("PreDrop", area.withTrimmedLeft (textWidth (wordmarkFont, house)),
+                juce::Justification::centredLeft, false);
 
     const juce::String badge ("BUILD-UP");
     const auto badgeFont = Fonts::sans (10.0f * s, true, 0.14f);
