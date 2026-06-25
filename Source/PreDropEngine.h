@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "RtSafety.h"
+
 /**
     PreDropEngine
 
@@ -169,7 +171,11 @@ public:
     void setRiserDepth  (float d) noexcept { depths.riser  = d; }
     void setHpfDepth    (float d) noexcept { depths.hpf    = d; }
 
-    void process (juce::AudioBuffer<float>& buffer)
+    // The audio-thread hot path. Annotated nonblocking so RealtimeSanitizer
+    // verifies it never allocates, locks, or makes a syscall: every primitive it
+    // touches (TPT filters, juce::dsp::Reverb, DelayLine, juce::Random) is
+    // alloc/lock-free once prepare() has run.
+    void process (juce::AudioBuffer<float>& buffer) PREDROP_RT_NONBLOCKING
     {
         const int numSamples = buffer.getNumSamples();
         const int channels   = juce::jmin (numCh, buffer.getNumChannels());
