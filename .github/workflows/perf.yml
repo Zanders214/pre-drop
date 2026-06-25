@@ -34,8 +34,11 @@ jobs:
       - name: Cache JUCE (FetchContent)
         uses: actions/cache@v4
         with:
+          # Generator-scoped key: the Makefiles-based build.yml / sonarcloud.yml
+          # cache the same _deps path, and reusing it under -G Ninja trips a
+          # "generator does not match" error in the JUCE subbuild.
           path: build/_deps
-          key: juce-${{ runner.os }}-8.0.4
+          key: juce-ninja-${{ runner.os }}-8.0.4
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPREDROP_BUILD_BENCH=ON
