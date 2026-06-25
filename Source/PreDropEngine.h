@@ -160,6 +160,10 @@ public:
         riserFilter.reset();
         reverb.reset();
         delayLine.reset();
+
+        // Re-prime the coefficient cache so the next block re-applies the cutoffs.
+        lastHpfCutoff   = -1.0f;
+        lastRiserCutoff = -1.0f;
     }
 
     void setAmount       (float newAmount) noexcept { amount       = newAmount; }
@@ -198,12 +202,19 @@ public:
         mixSm        .setTargetValue (mix);
         trimSm       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
 
+        auto* const* data = buffer.getArrayOfWritePointers();
+
         // --- 1. High-pass (per sample so the rising cutoff stays zipper-free) ----
         for (int n = 0; n < numSamples; ++n)
         {
-            hpf.setCutoffFrequency (hpfCutoffSm.getNextValue());
+            // The cutoff only moves while the smoother ramps; recomputing the TPT
+            // coefficient (an std::tan) every sample at a steady setting is pure
+            // waste, so only push it to the filter when it actually changes.
+            const float fc = hpfCutoffSm.getNextValue();
+            if (fc != lastHpfCutoff) { hpf.setCutoffFrequency (fc); lastHpfCutoff = fc; }
+
             for (int ch = 0; ch < channels; ++ch)
-                buffer.setSample (ch, n, hpf.processSample (ch, buffer.getSample (ch, n)));
+                data[ch][n] = hpf.processSample (ch, data[ch][n]);
         }
 
         // --- 2. Reverb (block based; params are not zipper-prone) ---------------
@@ -236,10 +247,10 @@ public:
 
             for (int ch = 0; ch < channels; ++ch)
             {
-                const float in      = buffer.getSample (ch, n);
+                const float in      = data[ch][n];
                 const float delayed = delayLine.popSample (ch);
                 delayLine.pushSample (ch, in + delayed * fb);
-                buffer.setSample (ch, n, in + delayed * wet);
+                data[ch][n] = in + delayed * wet;
             }
         }
 
@@ -249,26 +260,26 @@ public:
             const float level  = riserLevelSm.getNextValue();
             const float cutoff = riserCutoffSm.getNextValue();
 
-            riserFilter.setCutoffFrequency (cutoff);
+            // Same coefficient caching as the HPF: skip the per-sample std::tan
+            // when the band-pass centre is parked.
+            if (cutoff != lastRiserCutoff) { riserFilter.setCutoffFrequency (cutoff); lastRiserCutoff = cutoff; }
+
             const float noise    = random.nextFloat() * 2.0f - 1.0f;
             const float filtered = riserFilter.processSample (0, noise) * level;
 
             for (int ch = 0; ch < channels; ++ch)
-                buffer.addSample (ch, n, filtered);
+                data[ch][n] += filtered;
         }
 
         // --- 5. Global dry/wet mix + output trim (per sample) -------------------
+        auto* const* dry = dryBuffer.getArrayOfReadPointers();
         for (int n = 0; n < numSamples; ++n)
         {
             const float wetDry = mixSm.getNextValue();
             const float gain   = trimSm.getNextValue();
 
             for (int ch = 0; ch < channels; ++ch)
-            {
-                const float dry = dryBuffer.getSample (ch, n);
-                const float wet = buffer.getSample (ch, n);
-                buffer.setSample (ch, n, (dry * (1.0f - wetDry) + wet * wetDry) * gain);
-            }
+                data[ch][n] = (dry[ch][n] * (1.0f - wetDry) + data[ch][n] * wetDry) * gain;
         }
     }
 
@@ -292,6 +303,11 @@ private:
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine { maxDelaySamples };
     juce::Random                             random;
     juce::AudioBuffer<float>                 dryBuffer;
+
+    // Last cutoff pushed to each TPT filter, so process() can skip recomputing an
+    // identical coefficient (an std::tan) every sample. -1 forces the first apply.
+    float lastHpfCutoff   = -1.0f;
+    float lastRiserCutoff = -1.0f;
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> hpfCutoffSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> riserCutoffSm;
