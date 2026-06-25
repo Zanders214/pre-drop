@@ -1,0 +1,92 @@
+name: Performance Gates
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rtsan:
+    name: RealtimeSanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JUCE Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev \
+            libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev mesa-common-dev
+
+      - name: clang 20 (RealtimeSanitizer)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build-rt/_deps
+          key: juce-rt-${{ runner.os }}-8.0.4
+
+      - name: Configure
+        run: >
+          cmake -B build-rt -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20
+          -DPREDROP_RT_SANITIZE=ON
+
+      - name: Build rt_check
+        run: cmake --build build-rt --target rt_check --parallel
+
+      - name: Run under RTSan
+        env:
+          RTSAN_OPTIONS: "halt_on_error=1:suppressions=${{ github.workspace }}/Tests/rtsan_suppressions.txt"
+        run: |
+          BIN=$(find build-rt -type f -name rt_check -path '*_artefacts*' | head -1)
+          echo "Running $BIN"
+          xvfb-run -a "$BIN"
+
+  pluginval:
+    name: pluginval (in-process)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JUCE Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev \
+            libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev \
+            libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev mesa-common-dev
+
+      - uses: lukka/get-cmake@latest
+
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-${{ runner.os }}-8.0.4
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3
+        run: cmake --build build --target PreDrop_VST3 --parallel
+
+      - name: pluginval
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
+          unzip -o pluginval.zip && chmod +x pluginval
+          VST3=$(find build -name '*.vst3' -path '*_artefacts*' | head -1)
+          echo "Validating $VST3"
+          xvfb-run -a ./pluginval --strictness-level 5 --validate-in-process --timeout-ms 300000 "$VST3"
