@@ -87,3 +87,14 @@ bundling the TTFs as `BinaryData` is a localized swap in `PreDropTheme.h`.
 
 GitHub Actions builds on Linux/macOS/Windows, runs the unit tests, and validates the
 VST3 with [`pluginval`](https://github.com/Tracktion/pluginval) at strictness level 5.
+
+When a pull request from `dev` is merged into `main`, the release workflow builds and
+tests all three platforms and publishes a GitHub Release containing:
+
+- a Windows x64 ZIP (VST3 and standalone app),
+- a Linux x64 tarball (VST3 and standalone app), and
+- a universal macOS installer package (Apple Silicon and Intel).
+
+The macOS installer puts the VST3 in `/Library/Audio/Plug-Ins/VST3`, the AU in
+`/Library/Audio/Plug-Ins/Components`, and the standalone app in `/Applications`.
+After installation, restart Ableton Live so it scans the newly installed plug-in.
