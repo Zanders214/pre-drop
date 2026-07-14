@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784047547281,
+  "lastUpdate": 1784049552699,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -101,6 +101,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.387,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a664ce50db16aad59d53257009a1a6a4a180f54c",
+          "message": "Merge pull request #7 from Zanders214/dev\n\ndev to main",
+          "timestamp": "2026-07-14T19:16:43+02:00",
+          "tree_id": "6d726284f0eaa36fc47941ce72596233ea8e5cc6",
+          "url": "https://github.com/Zanders214/pre-drop/commit/a664ce50db16aad59d53257009a1a6a4a180f54c"
+        },
+        "date": 1784049552395,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 41923.55,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.393,
             "unit": "%"
           }
         ]
