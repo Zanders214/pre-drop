@@ -8,6 +8,7 @@
 */
 
 #include "PreDropEngine.h"
+#include "PreDropVisualModel.h"
 
 #include <cmath>
 #include <cstdio>
@@ -82,6 +83,46 @@ void testMappingBoundaries()
     check (monotonic, "every effect target rises monotonically with the macro");
 }
 
+// ---- Test 1b: per-effect depth scales each effect's maximum independently. ----
+void testDepthScaling()
+{
+    std::printf ("Per-effect depth scaling:\n");
+
+    const float eps = 1.0e-6f;
+
+    // Default depths reproduce the original fixed mapping exactly.
+    const auto full = PreDropEngine::mapMacro (1.0f);
+    const auto fullExplicit = PreDropEngine::mapMacro (1.0f, PreDropEngine::Depths {});
+    check (approx (full.reverbWet, fullExplicit.reverbWet, eps)
+        && approx (full.hpfCutoffHz, fullExplicit.hpfCutoffHz, eps),
+        "default Depths{} matches the original mapMacro(amount)");
+
+    // Depth 0 silences just that effect; the others are untouched.
+    PreDropEngine::Depths noReverb; noReverb.reverb = 0.0f;
+    const auto rv0 = PreDropEngine::mapMacro (1.0f, noReverb);
+    check (rv0.reverbWet < eps,                        "reverb depth 0 silences reverb at full amount");
+    check (approx (rv0.delayWet, full.delayWet, eps),  "reverb depth 0 leaves delay untouched");
+    check (approx (rv0.riserLevel, full.riserLevel, eps), "reverb depth 0 leaves riser untouched");
+
+    PreDropEngine::Depths noDelay; noDelay.delay = 0.0f;
+    check (PreDropEngine::mapMacro (1.0f, noDelay).delayWet < eps, "delay depth 0 silences delay");
+
+    PreDropEngine::Depths noRiser; noRiser.riser = 0.0f;
+    check (PreDropEngine::mapMacro (1.0f, noRiser).riserLevel < eps, "riser depth 0 silences riser");
+
+    // Depth 0.5 halves the effect's maximum.
+    PreDropEngine::Depths halfReverb; halfReverb.reverb = 0.5f;
+    check (approx (PreDropEngine::mapMacro (1.0f, halfReverb).reverbWet, full.reverbWet * 0.5f, eps),
+           "reverb depth 0.5 halves the reverb wet maximum");
+
+    // HPF depth scales the top of the sweep: 0 -> stays at 20 Hz, 1 -> ~800 Hz.
+    PreDropEngine::Depths noHpf; noHpf.hpf = 0.0f;
+    check (approx (PreDropEngine::mapMacro (1.0f, noHpf).hpfCutoffHz, 20.0f, 0.01f),
+           "HPF depth 0 keeps the cutoff at 20 Hz (low-cut effectively off)");
+    check (approx (full.hpfCutoffHz, 800.0f, 1.0f),
+           "HPF depth 1 (default) still reaches ~800 Hz");
+}
+
 // ---- Test 2: with the macro at zero, the effect is near-transparent. ----------
 void testNearPassthroughAtZero()
 {
@@ -144,6 +185,29 @@ void testStabilityAtFull()
     check (finite,      "output stays finite (no NaN/Inf) under sustained input at full");
     check (peak < 8.0f, "output stays bounded (feedback does not run away)");
 }
+
+// ---- Test 4: the editor's visual model stays in lock-step with the DSP. --------
+void testVisualModelMatchesEngine()
+{
+    std::printf ("Visual model <-> engine coupling:\n");
+
+    bool cutoffMatches = true;
+    for (int i = 0; i <= 100; ++i)
+    {
+        const float a = (float) i / 100.0f;
+        cutoffMatches = cutoffMatches
+                     && approx (PreDropVisualModel::cutoffHz (a), PreDropEngine::mapMacro (a).hpfCutoffHz, 0.5f);
+    }
+    check (cutoffMatches, "editor cutoff readout matches the engine HPF cutoff across the macro");
+
+    // The chips' engaged flags must line up with the engine's effects switching on.
+    check (PreDropEngine::mapMacro (0.19f).reverbWet  <= 0.0f && ! PreDropVisualModel::reverbEngaged (0.19f), "reverb idle below 20% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.21f).reverbWet  >  0.0f &&   PreDropVisualModel::reverbEngaged (0.21f), "reverb engaged above 20% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.39f).delayWet   <= 0.0f && ! PreDropVisualModel::delayEngaged  (0.39f), "delay idle below 40% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.41f).delayWet   >  0.0f &&   PreDropVisualModel::delayEngaged  (0.41f), "delay engaged above 40% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.59f).riserLevel <= 0.0f && ! PreDropVisualModel::riserEngaged  (0.59f), "riser idle below 60% in both UI and DSP");
+    check (PreDropEngine::mapMacro (0.61f).riserLevel >  0.0f &&   PreDropVisualModel::riserEngaged  (0.61f), "riser engaged above 60% in both UI and DSP");
+}
 } // namespace
 
 int main()
@@ -151,8 +215,10 @@ int main()
     std::printf ("PreDropEngine tests\n===================\n");
 
     testMappingBoundaries();
+    testDepthScaling();
     testNearPassthroughAtZero();
     testStabilityAtFull();
+    testVisualModelMatchesEngine();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

@@ -1,0 +1,8 @@
+# RealtimeSanitizer suppressions for PreDrop.
+#
+# Keep tiny. Each line hides a known, unavoidable third-party call from the gate.
+# Anything not listed stays a hard failure. Format:
+#   call-stack-contains:<pattern>
+#   function-name-matches:<pattern>
+#
+# (empty by default — PreDropEngine::process is expected to pass clean)

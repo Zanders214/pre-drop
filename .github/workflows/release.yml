@@ -1,0 +1,208 @@
+name: Release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # A closed PR is not necessarily a merge. Also require the repository's own
+    # dev branch so a similarly named branch in a fork cannot publish a release.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'dev' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    name: Build release (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            artifact: linux-x64
+          - name: Windows
+            os: windows-latest
+            artifact: windows-x64
+          - name: macOS
+            os: macos-latest
+            artifact: macos-universal
+
+    steps:
+      - name: Checkout merged main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libglu1-mesa-dev \
+            libcurl4-openssl-dev
+
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: release-juce-${{ runner.os }}-8.0.4
+
+      - name: Configure
+        run: >-
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          ${{ runner.os == 'macOS' && '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"' || '' }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package Linux release
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package/ZandersPreDrop/VST3 package/ZandersPreDrop/Standalone dist
+
+          VST3="$(find build/PreDrop_artefacts -type d -name '*.vst3' -print -quit)"
+          STANDALONE="$(find build/PreDrop_artefacts -type f -name 'ZandersPreDrop' -path '*/Standalone/*' -print -quit)"
+          test -n "$VST3"
+          test -n "$STANDALONE"
+
+          cp -R "$VST3" package/ZandersPreDrop/VST3/
+          cp "$STANDALONE" package/ZandersPreDrop/Standalone/
+          tar -C package -czf dist/ZandersPreDrop-Linux-x64.tar.gz ZandersPreDrop
+
+      - name: Package Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force package/ZandersPreDrop/VST3 | Out-Null
+          New-Item -ItemType Directory -Force package/ZandersPreDrop/Standalone | Out-Null
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          $vst3 = Get-ChildItem build/PreDrop_artefacts -Recurse -Directory -Filter *.vst3 | Select-Object -First 1
+          $standalone = Get-ChildItem build/PreDrop_artefacts -Recurse -File -Filter ZandersPreDrop.exe |
+            Where-Object { $_.FullName -match '[\\/]Standalone[\\/]' } |
+            Select-Object -First 1
+          if (-not $vst3) { throw 'Built VST3 was not found' }
+          if (-not $standalone) { throw 'Built standalone app was not found' }
+
+          Copy-Item $vst3.FullName package/ZandersPreDrop/VST3 -Recurse
+          Copy-Item $standalone.FullName package/ZandersPreDrop/Standalone/
+          Compress-Archive -Path package/ZandersPreDrop -DestinationPath dist/ZandersPreDrop-Windows-x64.zip
+
+      - name: Build macOS installer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG_ROOT="$RUNNER_TEMP/ZandersPreDrop-pkgroot"
+          mkdir -p \
+            "$PKG_ROOT/Library/Audio/Plug-Ins/VST3" \
+            "$PKG_ROOT/Library/Audio/Plug-Ins/Components" \
+            "$PKG_ROOT/Applications" \
+            dist
+
+          VST3="$(find build/PreDrop_artefacts -type d -name '*.vst3' -print -quit)"
+          AU="$(find build/PreDrop_artefacts -type d -name '*.component' -print -quit)"
+          APP="$(find build/PreDrop_artefacts -type d -name 'ZandersPreDrop.app' -print -quit)"
+          test -n "$VST3"
+          test -n "$AU"
+          test -n "$APP"
+
+          ditto "$VST3" "$PKG_ROOT/Library/Audio/Plug-Ins/VST3/$(basename "$VST3")"
+          ditto "$AU" "$PKG_ROOT/Library/Audio/Plug-Ins/Components/$(basename "$AU")"
+          ditto "$APP" "$PKG_ROOT/Applications/$(basename "$APP")"
+
+          VERSION="$(sed -nE 's/^project\(PreDrop VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          test -n "$VERSION"
+          pkgbuild \
+            --root "$PKG_ROOT" \
+            --identifier com.zandersaudio.predrop.installer \
+            --version "${VERSION}.${GITHUB_RUN_NUMBER}" \
+            --install-location / \
+            --ownership recommended \
+            dist/ZandersPreDrop-macOS-universal.pkg
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout merged main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Download platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum ZandersPreDrop-* > SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -nE 's/^project\(PreDrop VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          TAG="v${VERSION}-build.${GITHUB_RUN_NUMBER}"
+          TITLE="ZandersPreDrop ${VERSION} (build ${GITHUB_RUN_NUMBER})"
+
+          {
+            printf 'Automated release from dev → main PR [#%s](%s): %s\n\n' "$PR_NUMBER" "$PR_URL" "$PR_TITLE"
+            printf '### Downloads\n\n'
+            printf -- '- **macOS:** Run `ZandersPreDrop-macOS-universal.pkg`. It installs the VST3 and AU plug-ins system-wide, plus the standalone app in `/Applications`.\n'
+            printf -- '- **Windows:** `ZandersPreDrop-Windows-x64.zip`\n'
+            printf -- '- **Linux:** `ZandersPreDrop-Linux-x64.tar.gz`\n'
+          } > RELEASE_NOTES.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --target "$MERGE_SHA" \
+              --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md
+          fi

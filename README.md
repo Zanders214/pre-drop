@@ -1,4 +1,6 @@
-# Pre Drop
+# ZandersPreDrop
+
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tape-stop_pre-drop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tape-stop_pre-drop)
 
 A one-knob "build-up" effect plugin for DAWs (VST3 / AU / Standalone), built with
 [JUCE](https://juce.com). Turn a steady loop into the tension before a drop with a
@@ -53,14 +55,46 @@ ctest --test-dir build --output-on-failure
 
 ```
 Source/
-  PluginProcessor.{h,cpp}   thin host wrapper + parameters (APVTS)
-  PluginEditor.{h,cpp}      one-knob UI
-  PreDropEngine.h           host-agnostic DSP core (the macro mapping + effect chain)
+  PluginProcessor.{h,cpp}    thin host wrapper + parameters (APVTS)
+  PluginEditor.{h,cpp}       "Neon Clean" editor: knob + chips + curve + sliders
+  PreDropLookAndFeel.{h,cpp} custom knob (gradient ring) and Mix/Output sliders
+  EffectChips.h              HPF/REV/DLY/RIS status chips (read-only indicators)
+  BuildUpCurve.h             44-bar energy histogram; second handle on Amount
+  PreDropTheme.h             shared palette, fonts, colour + value formatting
+  PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
+  PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
 Tests/
-  PreDropEngineTests.cpp    framework-free unit tests
+  PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
+  PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model
 ```
+
+## UI
+
+The editor recreates the **"Direction D — Neon Clean"** design natively in JUCE
+(no WebView): a multicolour progress-ring **Amount** knob with a centred readout,
+four effect status chips that light up as each effect engages (HPF 0% → Reverb
+20% → Delay 40% → Riser 60%), a live build-up energy histogram you can also drag
+to set Amount, and Mix / Output sliders. Indicator values are derived from the
+macro through `PreDropVisualModel`, whose cutoff/threshold math is unit-tested
+against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
+authored at 360 px and scales proportionally (resizable, fixed aspect ratio).
+
+Typography targets Space Grotesk (UI) + JetBrains Mono (numbers), used when the
+host has them and falling back to the platform sans / monospaced face otherwise —
+bundling the TTFs as `BinaryData` is a localized swap in `PreDropTheme.h`.
 
 ## CI
 
 GitHub Actions builds on Linux/macOS/Windows, runs the unit tests, and validates the
 VST3 with [`pluginval`](https://github.com/Tracktion/pluginval) at strictness level 5.
+
+When a pull request from `dev` is merged into `main`, the release workflow builds and
+tests all three platforms and publishes a GitHub Release containing:
+
+- a Windows x64 ZIP (VST3 and standalone app),
+- a Linux x64 tarball (VST3 and standalone app), and
+- a universal macOS installer package (Apple Silicon and Intel).
+
+The macOS installer puts the VST3 in `/Library/Audio/Plug-Ins/VST3`, the AU in
+`/Library/Audio/Plug-Ins/Components`, and the standalone app in `/Applications`.
+After installation, restart Ableton Live so it scans the newly installed plug-in.

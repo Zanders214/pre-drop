@@ -3,9 +3,13 @@
 
 namespace ParamID
 {
-    static constexpr const char* amount     = "amount";
-    static constexpr const char* mix        = "mix";
-    static constexpr const char* outputTrim = "outputTrim";
+    static constexpr const char* amount      = "amount";
+    static constexpr const char* mix         = "mix";
+    static constexpr const char* outputTrim  = "outputTrim";
+    static constexpr const char* reverbDepth = "reverbDepth";
+    static constexpr const char* delayDepth  = "delayDepth";
+    static constexpr const char* riserDepth  = "riserDepth";
+    static constexpr const char* hpfDepth    = "hpfDepth";
 }
 
 PreDropAudioProcessor::PreDropAudioProcessor()
@@ -40,6 +44,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         ParameterID { ParamID::outputTrim, 1 }, "Output Trim",
         NormalisableRange<float> (-24.0f, 6.0f, 0.1f), 0.0f,
         AudioParameterFloatAttributes().withLabel ("dB")));
+
+    // Per-effect depth: how strong each effect gets at full build-up. Default
+    // 100% reproduces the original fixed mapping; lower one to pull that single
+    // effect back. The Amount macro still drives the build-up timing.
+    const auto addDepth = [&] (const char* id, const char* name)
+    {
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { id, 1 }, name,
+            NormalisableRange<float> (0.0f, 1.0f), 1.0f,
+            AudioParameterFloatAttributes().withStringFromValueFunction (percentFromValue)));
+    };
+
+    addDepth (ParamID::reverbDepth, "Reverb");
+    addDepth (ParamID::delayDepth,  "Delay");
+    addDepth (ParamID::riserDepth,  "Riser");
+    addDepth (ParamID::hpfDepth,    "High-Pass");
 
     return layout;
 }
@@ -78,6 +98,10 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     engine.setAmount       (apvts.getRawParameterValue (ParamID::amount)->load());
     engine.setMix          (apvts.getRawParameterValue (ParamID::mix)->load());
     engine.setOutputTrimDb (apvts.getRawParameterValue (ParamID::outputTrim)->load());
+    engine.setReverbDepth  (apvts.getRawParameterValue (ParamID::reverbDepth)->load());
+    engine.setDelayDepth   (apvts.getRawParameterValue (ParamID::delayDepth)->load());
+    engine.setRiserDepth   (apvts.getRawParameterValue (ParamID::riserDepth)->load());
+    engine.setHpfDepth     (apvts.getRawParameterValue (ParamID::hpfDepth)->load());
 
     engine.process (buffer);
 }
