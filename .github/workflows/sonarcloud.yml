@@ -78,8 +78,17 @@ jobs:
       # The plugin tests compile JUCE's module sources with --coverage too; skip
       # their data under _deps (JUCE's bundled HarfBuzz trips gcov), since only
       # Source/ is analysed anyway.
+      #
+      # Sonar's "Coverage" blends lines with branch conditions, and GCC records a
+      # branch at every call that could throw (the exception-cleanup path) plus
+      # compiler-generated ones on lines with no decision. Drop those so only real
+      # if / ternary / loop conditions count, and print the totals to the log.
       - name: Generate coverage report
-        run: gcovr --root . --exclude-directories '.*/_deps' --sonarqube > coverage.xml
+        run: >
+          gcovr --root . --filter 'Source/'
+          --exclude-directories '.*/_deps'
+          --exclude-throw-branches --exclude-unreachable-branches
+          --print-summary --sonarqube coverage.xml
 
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@v8

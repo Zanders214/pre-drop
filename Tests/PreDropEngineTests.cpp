@@ -218,6 +218,24 @@ void testRiserAudibleEarly()
     check (at70 < at80 && at80 < at100, "riser loudness rises across the window");
 }
 
+// ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
+void testEmptyBlocks()
+{
+    std::printf ("Empty blocks:\n");
+
+    PreDropEngine engine;
+    engine.prepare (48000.0, 2, 512);
+    engine.setAmount (1.0f);
+
+    juce::AudioBuffer<float> noSamples (2, 0);
+    engine.process (noSamples);
+    check (noSamples.getNumSamples() == 0, "a zero-length block is left alone");
+
+    juce::AudioBuffer<float> noChannels (0, 512);
+    engine.process (noChannels);
+    check (noChannels.getNumChannels() == 0, "a zero-channel block is left alone");
+}
+
 // ---- Test 4: the editor's visual model stays in lock-step with the DSP. --------
 void testVisualModelMatchesEngine()
 {
@@ -251,6 +269,7 @@ int main()
     testNearPassthroughAtZero();
     testStabilityAtFull();
     testRiserAudibleEarly();
+    testEmptyBlocks();
     testVisualModelMatchesEngine();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
