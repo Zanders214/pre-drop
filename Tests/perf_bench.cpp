@@ -23,7 +23,7 @@ int main (int argc, char** argv)
     proc.prepareToPlay (sr, bs);
 
     // Full build-up engaged so every effect stage contributes to the measurement.
-    *proc.apvts.getRawParameterValue ("amount") = 1.0f;
+    *proc.getState().getRawParameterValue ("amount") = 1.0f;
 
     juce::AudioBuffer<float> buffer (2, bs);
 

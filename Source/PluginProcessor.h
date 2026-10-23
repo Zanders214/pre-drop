@@ -20,6 +20,7 @@ public:
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    using AudioProcessor::processBlock;   // keep the double-precision overload visible
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
@@ -39,11 +40,13 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    juce::AudioProcessorValueTreeState apvts;
+    juce::AudioProcessorValueTreeState&       getState() noexcept       { return apvts; }
+    const juce::AudioProcessorValueTreeState& getState() const noexcept { return apvts; }
 
 private:
-    juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    juce::AudioProcessorValueTreeState apvts;
     PreDropEngine engine;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessor)

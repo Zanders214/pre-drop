@@ -45,7 +45,9 @@ Built plugins land under `build/PreDrop_artefacts/`.
 
 ## Tests
 
-The DSP core (`PreDropEngine`) has a headless, framework-free test harness:
+The DSP core (`PreDropEngine`) has a headless, framework-free test harness, and
+the processor and editor are tested headlessly too: the real UI is rendered
+offscreen in both panel states and at 2x (on Linux this runs under `xvfb-run`):
 
 ```sh
 ctest --test-dir build --output-on-failure
@@ -66,6 +68,7 @@ Source/
 Tests/
   PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
   PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model
+  PluginTests.cpp               processor + editor: params, state, audio, offscreen renders
 ```
 
 ## UI

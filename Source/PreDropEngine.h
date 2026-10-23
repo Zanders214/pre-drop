@@ -107,7 +107,6 @@ public:
 
     void prepare (double sampleRate, int numChannels, int maximumBlockSize)
     {
-        sr    = sampleRate;
         numCh = juce::jmax (1, numChannels);
 
         juce::dsp::ProcessSpec spec;
@@ -131,27 +130,27 @@ public:
         dryBuffer.setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
 
         const double ramp = 0.04; // 40 ms, fast enough to track but kills zipper noise
-        hpfCutoffSm  .reset (sampleRate, ramp);
-        reverbWetSm  .reset (sampleRate, ramp);
-        reverbSizeSm .reset (sampleRate, ramp);
-        delayWetSm   .reset (sampleRate, ramp);
-        delayFbSm    .reset (sampleRate, ramp);
-        riserLevelSm .reset (sampleRate, ramp);
-        riserCutoffSm.reset (sampleRate, ramp);
-        mixSm        .reset (sampleRate, ramp);
-        trimSm       .reset (sampleRate, ramp);
+        sm.hpfCutoff  .reset (sampleRate, ramp);
+        sm.reverbWet  .reset (sampleRate, ramp);
+        sm.reverbSize .reset (sampleRate, ramp);
+        sm.delayWet   .reset (sampleRate, ramp);
+        sm.delayFb    .reset (sampleRate, ramp);
+        sm.riserLevel .reset (sampleRate, ramp);
+        sm.riserCutoff.reset (sampleRate, ramp);
+        sm.mix        .reset (sampleRate, ramp);
+        sm.trim       .reset (sampleRate, ramp);
 
         // Snap smoothers to the current targets so the first block does not sweep.
         const Targets t = mapMacro (amount, depths);
-        hpfCutoffSm  .setCurrentAndTargetValue (t.hpfCutoffHz);
-        reverbWetSm  .setCurrentAndTargetValue (t.reverbWet);
-        reverbSizeSm .setCurrentAndTargetValue (t.reverbSize);
-        delayWetSm   .setCurrentAndTargetValue (t.delayWet);
-        delayFbSm    .setCurrentAndTargetValue (t.delayFeedback);
-        riserLevelSm .setCurrentAndTargetValue (t.riserLevel);
-        riserCutoffSm.setCurrentAndTargetValue (t.riserCutoffHz);
-        mixSm        .setCurrentAndTargetValue (mix);
-        trimSm       .setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
+        sm.hpfCutoff  .setCurrentAndTargetValue (t.hpfCutoffHz);
+        sm.reverbWet  .setCurrentAndTargetValue (t.reverbWet);
+        sm.reverbSize .setCurrentAndTargetValue (t.reverbSize);
+        sm.delayWet   .setCurrentAndTargetValue (t.delayWet);
+        sm.delayFb    .setCurrentAndTargetValue (t.delayFeedback);
+        sm.riserLevel .setCurrentAndTargetValue (t.riserLevel);
+        sm.riserCutoff.setCurrentAndTargetValue (t.riserCutoffHz);
+        sm.mix        .setCurrentAndTargetValue (mix);
+        sm.trim       .setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
 
         reset();
     }
@@ -194,15 +193,15 @@ public:
             dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
         const Targets t = mapMacro (amount, depths);
-        hpfCutoffSm  .setTargetValue (t.hpfCutoffHz);
-        reverbWetSm  .setTargetValue (t.reverbWet);
-        reverbSizeSm .setTargetValue (t.reverbSize);
-        delayWetSm   .setTargetValue (t.delayWet);
-        delayFbSm    .setTargetValue (t.delayFeedback);
-        riserLevelSm .setTargetValue (t.riserLevel);
-        riserCutoffSm.setTargetValue (t.riserCutoffHz);
-        mixSm        .setTargetValue (mix);
-        trimSm       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
+        sm.hpfCutoff  .setTargetValue (t.hpfCutoffHz);
+        sm.reverbWet  .setTargetValue (t.reverbWet);
+        sm.reverbSize .setTargetValue (t.reverbSize);
+        sm.delayWet   .setTargetValue (t.delayWet);
+        sm.delayFb    .setTargetValue (t.delayFeedback);
+        sm.riserLevel .setTargetValue (t.riserLevel);
+        sm.riserCutoff.setTargetValue (t.riserCutoffHz);
+        sm.mix        .setTargetValue (mix);
+        sm.trim       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
 
         auto* const* data = buffer.getArrayOfWritePointers();
 
@@ -212,8 +211,11 @@ public:
             // The cutoff only moves while the smoother ramps; recomputing the TPT
             // coefficient (an std::tan) every sample at a steady setting is pure
             // waste, so only push it to the filter when it actually changes.
-            const float fc = hpfCutoffSm.getNextValue();
-            if (fc != lastHpfCutoff) { hpf.setCutoffFrequency (fc); lastHpfCutoff = fc; }
+            if (const float fc = sm.hpfCutoff.getNextValue(); ! juce::exactlyEqual (fc, lastHpfCutoff))
+            {
+                hpf.setCutoffFrequency (fc);
+                lastHpfCutoff = fc;
+            }
 
             for (int ch = 0; ch < channels; ++ch)
                 data[ch][n] = hpf.processSample (ch, data[ch][n]);
@@ -221,8 +223,8 @@ public:
 
         // --- 2. Reverb (block based; params are not zipper-prone) ---------------
         {
-            const float wet  = reverbWetSm.skip (numSamples);
-            const float size = reverbSizeSm.skip (numSamples);
+            const float wet  = sm.reverbWet.skip (numSamples);
+            const float size = sm.reverbSize.skip (numSamples);
 
             // juce::dsp::Reverb scales dry by 2x and wet by 3x internally, so a
             // dryLevel of 0.5 is unity. Crossfade dry from unity (wet=0) to 0.
@@ -237,15 +239,15 @@ public:
             const auto reverbChannels = (size_t) juce::jmin (channels, 2);
             juce::dsp::AudioBlock<float> block (buffer);
             auto subBlock = block.getSubsetChannelBlock (0, reverbChannels);
-            juce::dsp::ProcessContextReplacing<float> ctx (subBlock);
+            juce::dsp::ProcessContextReplacing ctx (subBlock);
             reverb.process (ctx);
         }
 
         // --- 3. Delay / echo with feedback (per sample) -------------------------
         for (int n = 0; n < numSamples; ++n)
         {
-            const float wet = delayWetSm.getNextValue();
-            const float fb  = delayFbSm.getNextValue();
+            const float wet = sm.delayWet.getNextValue();
+            const float fb  = sm.delayFb.getNextValue();
 
             for (int ch = 0; ch < channels; ++ch)
             {
@@ -259,16 +261,15 @@ public:
         // --- 4. Riser / filtered-noise sweep (summed in parallel) ---------------
         for (int n = 0; n < numSamples; ++n)
         {
-            const float level  = riserLevelSm.getNextValue();
-            const float cutoff = riserCutoffSm.getNextValue();
+            const float level = sm.riserLevel.getNextValue();
 
             // Same coefficient caching as the HPF: skip the per-sample std::tan
-            // when the band-pass centre is parked.
-            // A constant-Q band-pass passes noise power proportional to its centre
-            // frequency, so at 200 Hz it is ~16 dB quieter than at 8 kHz. Scale by
-            // sqrt(ref / fc) to hold the noise at its 8 kHz loudness across the
-            // sweep; recomputed alongside the coefficient, not every sample.
-            if (cutoff != lastRiserCutoff)
+            // when the band-pass centre is parked. A constant-Q band-pass passes
+            // noise power proportional to its centre frequency, so at 200 Hz it is
+            // ~16 dB quieter than at 8 kHz; scaling by sqrt(ref / fc) holds the
+            // noise at its 8 kHz loudness across the sweep, and is recomputed
+            // alongside the coefficient rather than every sample.
+            if (const float cutoff = sm.riserCutoff.getNextValue(); ! juce::exactlyEqual (cutoff, lastRiserCutoff))
             {
                 riserFilter.setCutoffFrequency (cutoff);
                 riserNorm       = std::sqrt (riserNormRefHz / cutoff);
@@ -286,8 +287,8 @@ public:
         auto* const* dry = dryBuffer.getArrayOfReadPointers();
         for (int n = 0; n < numSamples; ++n)
         {
-            const float wetDry = mixSm.getNextValue();
-            const float gain   = trimSm.getNextValue();
+            const float wetDry = sm.mix.getNextValue();
+            const float gain   = sm.trim.getNextValue();
 
             for (int ch = 0; ch < channels; ++ch)
                 data[ch][n] = (dry[ch][n] * (1.0f - wetDry) + data[ch][n] * wetDry) * gain;
@@ -297,15 +298,14 @@ public:
 private:
     static constexpr int maxDelaySamples = 192000; // up to ~2 s even at 96 kHz
 
-    double sr    = 44100.0;
-    int    numCh = 2;
+    int numCh = 2;
 
     float amount       = 0.0f;
     float mix          = 1.0f;
     float outputTrimDb = 0.0f;
     Depths depths;
 
-    const double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
+    static constexpr double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
 
     juce::dsp::StateVariableTPTFilter<float> hpf;
     juce::dsp::StateVariableTPTFilter<float> riserFilter;
@@ -325,15 +325,21 @@ private:
     static constexpr float riserNormRefHz = 8000.0f;
     float riserNorm = 1.0f;
 
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> hpfCutoffSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> riserCutoffSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> reverbWetSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> reverbSizeSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayWetSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayFbSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> riserLevelSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mixSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> trimSm;
+    // One ramp per mapped target, so every parameter change glides instead of
+    // stepping. Cutoffs ramp multiplicatively (even in pitch), the rest linearly.
+    struct Smoothers
+    {
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> hpfCutoff;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> riserCutoff;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> reverbWet;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> reverbSize;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayWet;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayFb;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> riserLevel;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mix;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> trim;
+    };
+    Smoothers sm;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropEngine)
 };

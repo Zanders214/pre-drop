@@ -29,6 +29,7 @@ jobs:
           sudo apt-get install -y \
             ninja-build \
             gcovr \
+            xvfb \
             libasound2-dev \
             libjack-jackd2-dev \
             libfreetype6-dev \
@@ -74,8 +75,11 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # The plugin tests compile JUCE's module sources with --coverage too; skip
+      # their data under _deps (JUCE's bundled HarfBuzz trips gcov), since only
+      # Source/ is analysed anyway.
       - name: Generate coverage report
-        run: gcovr --root . --sonarqube > coverage.xml
+        run: gcovr --root . --exclude-directories '.*/_deps' --sonarqube > coverage.xml
 
       - name: SonarQube Cloud Scan
         uses: SonarSource/sonarqube-scan-action@v8

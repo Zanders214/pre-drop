@@ -2,6 +2,7 @@
 #include "PreDropTheme.h"
 #include "PreDropVisualModel.h"
 
+#include <array>
 #include <cmath>
 
 using namespace PreDrop;
@@ -19,24 +20,24 @@ namespace
         return arrangement.getBoundingBox (0, -1, true).getWidth();
     }
 
-    float amountOf (PreDropAudioProcessor& p) { return p.apvts.getRawParameterValue ("amount")->load(); }
+    float paramValue (const PreDropAudioProcessor& p, const char* id) { return p.getState().getRawParameterValue (id)->load(); }
 
     // Per-effect depth knobs, in display order. IDs match PluginProcessor's
     // ParamID namespace; colours match the effect chips.
-    const char* const depthParamIds[4] = { "reverbDepth", "delayDepth", "riserDepth", "hpfDepth" };
-    const char* const depthNames[4]    = { "REVERB", "DELAY", "RISER", "HIGH-PASS" };
+    constexpr std::array<const char*, 4> depthParamIds { "reverbDepth", "delayDepth", "riserDepth", "hpfDepth" };
+    constexpr std::array<const char*, 4> depthNames    { "REVERB", "DELAY", "RISER", "HIGH-PASS" };
     juce::Colour depthColour (int i)
     {
         using namespace PreDrop::Palette;
-        const juce::Colour cols[4] = { violet, pink, amber, cyan };
-        return cols[juce::jlimit (0, 3, i)];
+        const std::array<juce::Colour, 4> cols { violet, pink, amber, cyan };
+        return cols[(size_t) juce::jlimit (0, 3, i)];
     }
 }
 
 PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor& p)
     : AudioProcessorEditor (&p),
       processorRef (p),
-      buildUpCurve (p.apvts, "amount")
+      buildUpCurve (p.getState(), "amount")
 {
     // --- Amount knob ---------------------------------------------------------
     amountSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -44,8 +45,8 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
                                       juce::degreesToRadians (135.0f), true);
     amountSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     amountSlider.setMouseDragSensitivity (220);   // ~220 px of travel for full range
-    const float defaultAmount = p.apvts.getParameterRange ("amount")
-                                    .convertFrom0to1 (p.apvts.getParameter ("amount")->getDefaultValue());
+    const float defaultAmount = p.getState().getParameterRange ("amount")
+                                    .convertFrom0to1 (p.getState().getParameter ("amount")->getDefaultValue());
     amountSlider.setDoubleClickReturnValue (true, defaultAmount);
     amountSlider.setLookAndFeel (&lnf);
     addAndMakeVisible (amountSlider);
@@ -62,19 +63,20 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     // --- Per-effect depth knobs (hidden until the EFFECTS button is pressed) --
     for (int i = 0; i < numDepths; ++i)
     {
-        auto& sl = depthSliders[i];
+        const auto idx = (size_t) i;
+        auto& sl = depthSliders[idx];
         sl.setSliderStyle (juce::Slider::RotaryVerticalDrag);
         sl.setRotaryParameters (juce::degreesToRadians (-135.0f),
                                 juce::degreesToRadians (135.0f), true);
         sl.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         sl.setColour (juce::Slider::rotarySliderFillColourId, depthColour (i));
         sl.setLookAndFeel (&depthLnf);
-        const float def = p.apvts.getParameterRange (depthParamIds[i])
-                              .convertFrom0to1 (p.apvts.getParameter (depthParamIds[i])->getDefaultValue());
+        const float def = p.getState().getParameterRange (depthParamIds[idx])
+                              .convertFrom0to1 (p.getState().getParameter (depthParamIds[idx])->getDefaultValue());
         sl.setDoubleClickReturnValue (true, def);
         sl.onValueChange = [this] { repaint(); };
         addChildComponent (sl);   // added but not visible until the panel opens
-        depthAttachments[i] = std::make_unique<SliderAttachment> (p.apvts, depthParamIds[i], sl);
+        depthAttachments[idx] = std::make_unique<SliderAttachment> (p.getState(), depthParamIds[idx], sl);
     }
 
     // --- EFFECTS reveal toggle -----------------------------------------------
@@ -85,14 +87,14 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     addAndMakeVisible (effectsButton);
 
     // --- Indicators ----------------------------------------------------------
-    effectChips.getAmount   = [this] { return amountOf (processorRef); };
-    effectChips.getHpfDepth = [this] { return processorRef.apvts.getRawParameterValue ("hpfDepth")->load(); };
+    effectChips.setAmountSource   ([this] { return paramValue (processorRef, "amount"); });
+    effectChips.setHpfDepthSource ([this] { return paramValue (processorRef, "hpfDepth"); });
     addAndMakeVisible (effectChips);
     addAndMakeVisible (buildUpCurve);
 
-    amountAttachment = std::make_unique<SliderAttachment> (p.apvts, "amount", amountSlider);
-    mixAttachment    = std::make_unique<SliderAttachment> (p.apvts, "mix", mixSlider);
-    trimAttachment   = std::make_unique<SliderAttachment> (p.apvts, "outputTrim", trimSlider);
+    amountAttachment = std::make_unique<SliderAttachment> (p.getState(), "amount", amountSlider);
+    mixAttachment    = std::make_unique<SliderAttachment> (p.getState(), "mix", mixSlider);
+    trimAttachment   = std::make_unique<SliderAttachment> (p.getState(), "outputTrim", trimSlider);
 
     // The MIX/OUTPUT readouts are painted by the editor (above the tracks), so
     // repaint on value change to keep them in lock-step with the thumbs during a
@@ -137,31 +139,31 @@ void PreDropAudioProcessorEditor::setDepthPanelOpen (bool shouldBeOpen)
 
 void PreDropAudioProcessorEditor::timerCallback()
 {
-    const float a = amountOf (processorRef);
-    const float m = processorRef.apvts.getRawParameterValue ("mix")->load();
-    const float t = processorRef.apvts.getRawParameterValue ("outputTrim")->load();
+    const float a = paramValue (processorRef, "amount");
+    const float m = paramValue (processorRef, "mix");
+    const float t = paramValue (processorRef, "outputTrim");
 
-    bool changed = std::abs (a - lastAmount) > 1.0e-4f
-                || std::abs (m - lastMix) > 1.0e-4f
-                || std::abs (t - lastTrim) > 1.0e-3f;
+    bool changed = std::abs (a - last.amount) > 1.0e-4f
+                || std::abs (m - last.mix) > 1.0e-4f
+                || std::abs (t - last.trim) > 1.0e-3f;
 
     // The HPF chip readout depends on the HPF depth even when the panel is shut,
     // and the panel's painted percent labels need refreshing while it is open.
-    for (int i = 0; i < numDepths; ++i)
+    for (size_t i = 0; i < depthParamIds.size(); ++i)
     {
-        const float d = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
-        if (std::abs (d - lastDepths[i]) > 1.0e-4f)
+        const float d = paramValue (processorRef, depthParamIds[i]);
+        if (std::abs (d - last.depths[i]) > 1.0e-4f)
         {
-            lastDepths[i] = d;
+            last.depths[i] = d;
             changed = true;
         }
     }
 
     if (changed)
     {
-        lastAmount = a;
-        lastMix    = m;
-        lastTrim   = t;
+        last.amount = a;
+        last.mix    = m;
+        last.trim   = t;
         repaint();
     }
 }
@@ -169,11 +171,11 @@ void PreDropAudioProcessorEditor::timerCallback()
 void PreDropAudioProcessorEditor::paint (juce::Graphics& g)
 {
     const float s = uiScale;
-    const float w = (float) getWidth();
-    const float h = (float) getHeight();
+    const auto w = (float) getWidth();
+    const auto h = (float) getHeight();
 
     // --- panel: radial gradient like the CSS backdrop -----------------------
-    const juce::Point<float> centre (w * 0.5f, -0.1f * h);
+    const juce::Point centre (w * 0.5f, -0.1f * h);
     float radius = 0.0f;
     radius = juce::jmax (radius, centre.getDistanceFrom ({ 0.0f, 0.0f }));
     radius = juce::jmax (radius, centre.getDistanceFrom ({ w,    0.0f }));
@@ -201,8 +203,8 @@ void PreDropAudioProcessorEditor::paint (juce::Graphics& g)
 
     // Separator between the curve and the slider section.
     g.setColour (Palette::hairline);
-    g.fillRect (juce::Rectangle<float> (kPanelPad * s, (float) sliderSeparatorY,
-                                        w - 2.0f * kPanelPad * s, juce::jmax (1.0f, s)));
+    g.fillRect (juce::Rectangle (kPanelPad * s, (float) layout.sliderSeparatorY,
+                                 w - 2.0f * kPanelPad * s, juce::jmax (1.0f, s)));
 
     paintSliderLabels (g, s);
 
@@ -210,12 +212,12 @@ void PreDropAudioProcessorEditor::paint (juce::Graphics& g)
         paintDepthPanel (g, s);
 }
 
-void PreDropAudioProcessorEditor::paintDepthPanel (juce::Graphics& g, float s)
+void PreDropAudioProcessorEditor::paintDepthPanel (juce::Graphics& g, float s) const
 {
     using namespace PreDrop;
 
     // Soft backing so the knobs read as a grouped panel over the curve's slot.
-    const auto panel = revealArea.toFloat();
+    const auto panel = layout.reveal.toFloat();
     g.setColour (Palette::chipSurface);
     g.fillRoundedRectangle (panel, 12.0f * s);
 
@@ -224,30 +226,30 @@ void PreDropAudioProcessorEditor::paintDepthPanel (juce::Graphics& g, float s)
     const auto nameFont  = Fonts::sans (10.0f * s, true, 0.10f);   // --tracking-data
     const auto valueFont = Fonts::mono (10.0f * s);
 
-    for (int i = 0; i < numDepths; ++i)
+    for (size_t i = 0; i < depthParamIds.size(); ++i)
     {
-        const auto  col    = depthKnobAreas[i].toFloat();
+        const auto  col    = layout.depthKnobs[i].toFloat();
         const auto  dial   = depthSliders[i].getBounds().toFloat();
-        const float value  = processorRef.apvts.getRawParameterValue (depthParamIds[i])->load();
+        const float value  = paramValue (processorRef, depthParamIds[i]);
         const float textTop = dial.getBottom() + 2.0f * s;
 
         g.setFont (nameFont);
         g.setColour (Palette::textMid);
         g.drawText (depthNames[i],
-                    juce::Rectangle<float> (col.getX(), textTop, col.getWidth(), 12.0f * s),
+                    juce::Rectangle (col.getX(), textTop, col.getWidth(), 12.0f * s),
                     juce::Justification::centredTop, false);
 
         g.setFont (valueFont);
-        g.setColour (depthColour (i));
+        g.setColour (depthColour ((int) i));
         g.drawText (Format::percent (value),
-                    juce::Rectangle<float> (col.getX(), textTop + 12.0f * s, col.getWidth(), 13.0f * s),
+                    juce::Rectangle (col.getX(), textTop + 12.0f * s, col.getWidth(), 13.0f * s),
                     juce::Justification::centredTop, false);
     }
 }
 
-void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s)
+void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s) const
 {
-    const auto area = headerArea.toFloat();
+    const auto area = layout.header.toFloat();
 
     // Wordmark: house brand "Zanders" in primary text, tight against the pink
     // product name — CamelCase, no space, per the design-system Wordmark.
@@ -269,8 +271,8 @@ void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s)
     const float pillW = textWidth (badgeFont, badge) + padX * 2.0f;
     const float pillH = 10.0f * s + padY * 2.0f;
 
-    const juce::Rectangle<float> pill (area.getRight() - pillW, area.getCentreY() - pillH * 0.5f,
-                                       pillW, pillH);
+    const juce::Rectangle pill (area.getRight() - pillW, area.getCentreY() - pillH * 0.5f,
+                                pillW, pillH);
 
     g.setColour (Palette::badge.withAlpha (0.12f));
     g.fillRoundedRectangle (pill, juce::jmin (pillH * 0.5f, 20.0f * s));
@@ -280,10 +282,10 @@ void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s)
     g.drawText (badge, pill, juce::Justification::centred, false);
 }
 
-void PreDropAudioProcessorEditor::paintSliderLabels (juce::Graphics& g, float s)
+void PreDropAudioProcessorEditor::paintSliderLabels (juce::Graphics& g, float s) const
 {
-    const float mix  = processorRef.apvts.getRawParameterValue ("mix")->load();
-    const float trim = processorRef.apvts.getRawParameterValue ("outputTrim")->load();
+    const float mix  = paramValue (processorRef, "mix");
+    const float trim = paramValue (processorRef, "outputTrim");
 
     const auto nameFont  = Fonts::sans (10.0f * s, false, 0.08f);
     const auto valueFont = Fonts::mono (10.0f * s);
@@ -300,8 +302,8 @@ void PreDropAudioProcessorEditor::paintSliderLabels (juce::Graphics& g, float s)
         g.drawText (value, r, juce::Justification::centredRight, false);
     };
 
-    drawRow (mixLabelArea,  "MIX",    Format::percent (mix));
-    drawRow (trimLabelArea, "OUTPUT", juce::String (trim, 1) + " dB");
+    drawRow (layout.mixLabel,  "MIX",    Format::percent (mix));
+    drawRow (layout.trimLabel, "OUTPUT", juce::String (trim, 1) + " dB");
 }
 
 void PreDropAudioProcessorEditor::resized()
@@ -317,7 +319,7 @@ void PreDropAudioProcessorEditor::resized()
 
     auto area = getLocalBounds().reduced (px (kPanelPad));
 
-    headerArea = area.removeFromTop (px (20.0f));
+    layout.header = area.removeFromTop (px (20.0f));
 
     area.removeFromTop (px (14.0f));                       // gap before knob
     auto knob = area.removeFromTop (px (172.0f));
@@ -333,13 +335,13 @@ void PreDropAudioProcessorEditor::resized()
     effectsButton.setBounds (buttonRow.removeFromRight (px (84.0f)));
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
-    revealArea = area.removeFromTop (px (114.0f));
-    buildUpCurve.setBounds (revealArea);
+    layout.reveal = area.removeFromTop (px (114.0f));
+    buildUpCurve.setBounds (layout.reveal);
 
     // Lay out the four depth dials across the reveal slot (used when open): each
     // column is an arc on top with its name + value stacked beneath it.
     {
-        auto knobs = revealArea.reduced (px (8.0f), px (8.0f));
+        auto knobs = layout.reveal.reduced (px (8.0f), px (8.0f));
         const int kGap      = px (10.0f);
         const int colW      = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
         const int textBlock = px (26.0f);                  // name + value lines
@@ -348,20 +350,20 @@ void PreDropAudioProcessorEditor::resized()
         // Vertically centre the dial + text block within the slot.
         knobs.removeFromTop (juce::jmax (0, (knobs.getHeight() - (dialSize + textBlock)) / 2));
 
-        for (int i = 0; i < numDepths; ++i)
+        for (size_t i = 0; i < depthSliders.size(); ++i)
         {
             auto col = knobs.removeFromLeft (colW);
-            if (i < numDepths - 1)
+            if (i + 1 < depthSliders.size())
                 knobs.removeFromLeft (kGap);
 
-            depthKnobAreas[i] = col;                        // full column for name/value paint
+            layout.depthKnobs[i] = col;                     // full column for name/value paint
             depthSliders[i].setBounds (col.removeFromTop (dialSize)
                                           .withSizeKeepingCentre (dialSize, dialSize));
         }
     }
 
     area.removeFromTop (px (20.0f));                       // gap before slider section
-    sliderSeparatorY = area.getY();
+    layout.sliderSeparatorY = area.getY();
     area.removeFromTop (px (18.0f));                       // padding under the separator
 
     auto sliders = area.removeFromTop (px (38.0f));
@@ -379,6 +381,6 @@ void PreDropAudioProcessorEditor::resized()
     sliders.removeFromLeft (gap);
     auto trimColumn = sliders;
 
-    layoutColumn (mixColumn,  mixLabelArea,  mixSlider);
-    layoutColumn (trimColumn, trimLabelArea, trimSlider);
+    layoutColumn (mixColumn,  layout.mixLabel,  mixSlider);
+    layoutColumn (trimColumn, layout.trimLabel, trimSlider);
 }

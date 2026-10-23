@@ -23,8 +23,8 @@ void PreDropLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
 {
     // Self-scaling from the actual footprint (authored at 172 px).
     const float s = (float) width / 172.0f;
-    const juce::Point<float> centre ((float) x + (float) width * 0.5f,
-                                     (float) y + (float) height * 0.5f);
+    const juce::Point centre ((float) x + (float) width * 0.5f,
+                              (float) y + (float) height * 0.5f);
 
     const float ringRadius = 72.5f * s;   // mid of the 67..78 px ring band
     const float ringThick  = 11.0f * s;
@@ -86,8 +86,8 @@ void PreDropLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
 
     {
         // Radial fill, highlight biased to 40% / 30% like the CSS gradient.
-        const juce::Point<float> hi (bodyBounds.getX() + 0.40f * bodyBounds.getWidth(),
-                                     bodyBounds.getY() + 0.30f * bodyBounds.getHeight());
+        const juce::Point hi (bodyBounds.getX() + 0.40f * bodyBounds.getWidth(),
+                              bodyBounds.getY() + 0.30f * bodyBounds.getHeight());
         juce::ColourGradient body (Palette::knobBodyHi, hi.x, hi.y,
                                    Palette::knobBodyLo, centre.x, centre.y + bodyRadius, true);
         body.addColour (0.6, ColourMath::lerp (Palette::knobBodyHi, Palette::knobBodyLo, 0.6f));
@@ -109,8 +109,8 @@ void PreDropLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
     {
         const float dotRadius = 4.5f * s;
         const float dotDist   = 45.5f * s;     // sits near the top edge of the body
-        const juce::Point<float> dot (centre.x + dotDist * std::sin (curAngle),
-                                      centre.y - dotDist * std::cos (curAngle));
+        const juce::Point dot (centre.x + dotDist * std::sin (curAngle),
+                               centre.y - dotDist * std::cos (curAngle));
 
         juce::Path dotPath;
         dotPath.addEllipse (juce::Rectangle<float> (dotRadius * 2.0f, dotRadius * 2.0f).withCentre (dot));
@@ -178,26 +178,26 @@ void PreDropLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     const float s = uiScale;
     const float trackThickness = 4.0f * s;
     const float centreY = (float) y + (float) height * 0.5f;
-    const float left    = (float) x;
+    const auto  left    = (float) x;
     const float right   = (float) x + (float) width;
 
-    const juce::Rectangle<float> trackRect (left, centreY - trackThickness * 0.5f,
-                                            (float) width, trackThickness);
+    const juce::Rectangle trackRect (left, centreY - trackThickness * 0.5f,
+                                     (float) width, trackThickness);
     g.setColour (Palette::sliderTrack);
     g.fillRoundedRectangle (trackRect, trackThickness * 0.5f);
 
     const float fillRight = juce::jlimit (left, right, sliderPos);
     if (fillRight > left + 0.5f)
     {
-        const juce::Rectangle<float> fillRect (left, centreY - trackThickness * 0.5f,
-                                               fillRight - left, trackThickness);
+        const juce::Rectangle fillRect (left, centreY - trackThickness * 0.5f,
+                                        fillRight - left, trackThickness);
         juce::ColourGradient grad (Palette::cyan, left, 0.0f, Palette::violet, right, 0.0f, false);
         g.setGradientFill (grad);
         g.fillRoundedRectangle (fillRect, trackThickness * 0.5f);
     }
 
     const float thumbRadius = 6.5f * s;
-    const juce::Point<float> thumb (fillRight, centreY);
+    const juce::Point thumb (fillRight, centreY);
 
     juce::Path thumbPath;
     thumbPath.addEllipse (juce::Rectangle<float> (thumbRadius * 2.0f, thumbRadius * 2.0f).withCentre (thumb));
@@ -238,8 +238,11 @@ void PreDropLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
     else
     {
         // Idle: flat white-alpha fill (--layer-2) + hairline border (--layer-5).
-        const float fill = shouldDrawButtonAsDown ? 0.10f
-                          : shouldDrawButtonAsHighlighted ? 0.08f : 0.06f;
+        float fill = 0.06f;
+        if (shouldDrawButtonAsDown)
+            fill = 0.10f;
+        else if (shouldDrawButtonAsHighlighted)
+            fill = 0.08f;
         g.setColour (juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, fill));
         g.fillPath (pill);
 
@@ -272,7 +275,7 @@ void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& bu
     const juce::Colour dotCol  = on ? juce::Colours::white : Palette::textStrong;
     const juce::Colour glowCol = on ? juce::Colours::white : Palette::badge;
 
-    juce::Rectangle<float> dotRect (xL, cy - dot * 0.5f, dot, dot);
+    const juce::Rectangle dotRect (xL, cy - dot * 0.5f, dot, dot);
     juce::Path dotPath;
     dotPath.addRoundedRectangle (dotRect, 1.5f * s);
     juce::DropShadow (glowCol.withAlpha (on ? 0.9f : 0.6f), (int) (8.0f * s), {})
@@ -291,8 +294,8 @@ void DepthKnobLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, in
                                              float rotaryEndAngle, juce::Slider& slider)
 {
     const float s = uiScale;
-    const juce::Point<float> centre ((float) x + (float) width * 0.5f,
-                                     (float) y + (float) height * 0.5f);
+    const juce::Point centre ((float) x + (float) width * 0.5f,
+                              (float) y + (float) height * 0.5f);
 
     const float ringRadius = juce::jmin ((float) width, (float) height) * 0.5f - 3.0f * s;
     const float ringThick  = 3.5f * s;
