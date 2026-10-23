@@ -94,10 +94,12 @@ public:
         t.delayWet      = 0.50f * d * juce::jlimit (0.0f, 1.0f, depth.delay);
         t.delayFeedback = std::min (0.85f * d, 0.95f);
 
-        // 4. Riser: engages at 60% with a sharp late surge.
+        // 4. Riser: engages at 60% and fades in linearly. A linear gain already
+        //    reads as a fast-then-gentle rise in dB, so it is audible soon after
+        //    the window opens rather than only in the last 10-20%. process()
+        //    normalises the band-pass loudness, so this is the perceived level.
         const float s = window (m, 0.60f, 1.0f);
-        const float sCurve = s * s;
-        t.riserLevel    = 0.70f * sCurve * juce::jlimit (0.0f, 1.0f, depth.riser);
+        t.riserLevel    = 0.70f * s * juce::jlimit (0.0f, 1.0f, depth.riser);
         t.riserCutoffHz = 200.0f * std::pow (8000.0f / 200.0f, s);     // 200 -> 8k Hz
 
         return t;
@@ -262,10 +264,19 @@ public:
 
             // Same coefficient caching as the HPF: skip the per-sample std::tan
             // when the band-pass centre is parked.
-            if (cutoff != lastRiserCutoff) { riserFilter.setCutoffFrequency (cutoff); lastRiserCutoff = cutoff; }
+            // A constant-Q band-pass passes noise power proportional to its centre
+            // frequency, so at 200 Hz it is ~16 dB quieter than at 8 kHz. Scale by
+            // sqrt(ref / fc) to hold the noise at its 8 kHz loudness across the
+            // sweep; recomputed alongside the coefficient, not every sample.
+            if (cutoff != lastRiserCutoff)
+            {
+                riserFilter.setCutoffFrequency (cutoff);
+                riserNorm       = std::sqrt (riserNormRefHz / cutoff);
+                lastRiserCutoff = cutoff;
+            }
 
             const float noise    = random.nextFloat() * 2.0f - 1.0f;
-            const float filtered = riserFilter.processSample (0, noise) * level;
+            const float filtered = riserFilter.processSample (0, noise) * riserNorm * level;
 
             for (int ch = 0; ch < channels; ++ch)
                 data[ch][n] += filtered;
@@ -308,6 +319,11 @@ private:
     // identical coefficient (an std::tan) every sample. -1 forces the first apply.
     float lastHpfCutoff   = -1.0f;
     float lastRiserCutoff = -1.0f;
+
+    // Riser band-pass loudness compensation, referenced to the top of the sweep
+    // so the full-tilt riser level is unchanged.
+    static constexpr float riserNormRefHz = 8000.0f;
+    float riserNorm = 1.0f;
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> hpfCutoffSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> riserCutoffSm;

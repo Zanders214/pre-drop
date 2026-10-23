@@ -34,7 +34,7 @@ struct PreDropVisualModel
     static float hpfProgress    (float a) noexcept { return std::pow (clamp01 (a), 1.5f); }
     static float reverbProgress (float a) noexcept { return window (a, 0.20f, 1.0f); }
     static float delayProgress  (float a) noexcept { return window (a, 0.40f, 1.0f); }
-    static float riserProgress  (float a) noexcept { const float s = window (a, 0.60f, 1.0f); return s * s; }
+    static float riserProgress  (float a) noexcept { return window (a, 0.60f, 1.0f); }
 
     /** Displayed high-pass cutoff in Hz: 20 -> (20..800), log-swept. Equals
         mapMacro's hpfCutoffHz. hpfDepth scales the top of the sweep (default 1
