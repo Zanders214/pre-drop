@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792756963835,
+  "lastUpdate": 1792758409310,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -237,6 +237,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.393,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66af22fd6676b3b1e8ebc4ceb3f729c457f0cbc2",
+          "message": "Merge pull request #11 from Zanders214/claude/sonar-branch-coverage\n\nSonar coverage: count real branch conditions, test the untested ones",
+          "timestamp": "2026-10-23T14:20:31+02:00",
+          "tree_id": "5874601cd7dd3985a2594ea06e58baa6854548ac",
+          "url": "https://github.com/Zanders214/pre-drop/commit/66af22fd6676b3b1e8ebc4ceb3f729c457f0cbc2"
+        },
+        "date": 1792758408454,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 28708.1,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.269,
             "unit": "%"
           }
         ]
