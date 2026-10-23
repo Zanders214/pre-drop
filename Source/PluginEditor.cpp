@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cmath>
+#include <utility>
 
 using namespace PreDrop;
 
@@ -87,8 +88,16 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     addAndMakeVisible (effectsButton);
 
     // --- Indicators ----------------------------------------------------------
-    effectChips.setAmountSource   ([this] { return paramValue (processorRef, "amount"); });
-    effectChips.setHpfDepthSource ([this] { return paramValue (processorRef, "hpfDepth"); });
+    effectChips.setAmountSource ([this] { return paramValue (processorRef, "amount"); });
+    using Effect = EffectChips::Effect;
+    for (const auto& source : { std::pair { Effect::hpf,    "hpfDepth" },
+                                std::pair { Effect::reverb, "reverbDepth" },
+                                std::pair { Effect::delay,  "delayDepth" },
+                                std::pair { Effect::riser,  "riserDepth" } })
+    {
+        const char* id = source.second;
+        effectChips.setDepthSource (source.first, [this, id] { return paramValue (processorRef, id); });
+    }
     addAndMakeVisible (effectChips);
     addAndMakeVisible (buildUpCurve);
 

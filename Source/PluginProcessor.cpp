@@ -45,14 +45,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         NormalisableRange<float> (-24.0f, 6.0f, 0.1f), 0.0f,
         AudioParameterFloatAttributes().withLabel ("dB")));
 
-    // Per-effect depth: how strong each effect gets at full build-up. Default
-    // 100% reproduces the original fixed mapping; lower one to pull that single
-    // effect back. The Amount macro still drives the build-up timing.
+    // Per-effect depth: how strong each effect gets at full build-up. The 50%
+    // default is the balanced setting where every effect sits at the same level;
+    // 0% switches that effect off and 100% doubles it. Amount drives them all.
     const auto addDepth = [&] (const char* id, const char* name)
     {
         layout.add (std::make_unique<AudioParameterFloat> (
             ParameterID { id, 1 }, name,
-            NormalisableRange<float> (0.0f, 1.0f), 1.0f,
+            NormalisableRange<float> (0.0f, 1.0f), 0.5f,
             AudioParameterFloatAttributes().withStringFromValueFunction (percentFromValue)));
     };
 

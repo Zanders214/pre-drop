@@ -11,8 +11,11 @@
 #include "PreDropVisualModel.h"
 
 #include <cmath>
+#include <array>
 #include <cstdio>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -44,30 +47,39 @@ float rms (const juce::AudioBuffer<float>& buffer, int channel, int start, int e
     return (float) std::sqrt (sum / juce::jmax (1, end - start));
 }
 
-// ---- Test 1: the macro mapping engages effects in the expected order. ---------
+// ---- Test 1: every effect follows the macro from the first percent. ----------
 void testMappingBoundaries()
 {
     std::printf ("Mapping boundaries:\n");
 
     const float eps = 1.0e-9f;
     const auto at0 = PreDropEngine::mapMacro (0.0f);
-    check (approx (at0.hpfCutoffHz, 20.0f, 0.5f), "at amount=0 HPF cutoff sits at ~20 Hz");
+    check (approx (at0.hpfCutoffHz, 20.0f, 0.01f), "at amount=0 HPF cutoff sits at 20 Hz");
     check (at0.reverbWet  < eps, "at amount=0 reverb is silent");
     check (at0.delayWet   < eps, "at amount=0 delay is silent");
     check (at0.riserLevel < eps, "at amount=0 riser is silent");
 
-    const auto at05 = PreDropEngine::mapMacro (0.5f);
-    check (at05.hpfCutoffHz > 20.0f, "at amount=0.5 the HPF has opened up");
-    check (at05.reverbWet  > 0.0f,   "at amount=0.5 reverb is engaging (window opens at 20%)");
-    check (at05.delayWet   > 0.0f,   "at amount=0.5 delay is engaging (window opens at 40%)");
-    check (at05.riserLevel < eps,    "at amount=0.5 riser is still silent (window opens at 60%)");
+    // No staggered start points: one percent of Amount engages all four.
+    const auto at1pc = PreDropEngine::mapMacro (0.01f);
+    check (at1pc.hpfCutoffHz > 20.0f && at1pc.reverbWet > 0.0f && at1pc.delayWet > 0.0f && at1pc.riserLevel > 0.0f,
+           "at amount=1% every effect is already engaged");
 
     const auto at1 = PreDropEngine::mapMacro (1.0f);
-    check (approx (at1.hpfCutoffHz, 800.0f, 1.0f),          "at amount=1 HPF cutoff reaches ~800 Hz");
-    check (at1.reverbWet > 0.0f && at1.riserLevel > 0.0f,   "at amount=1 every effect is fully engaged");
-    check (at1.delayFeedback <= 0.95f,                      "delay feedback stays clamped <= 0.95 for stability");
+    check (approx (at1.hpfCutoffHz, 800.0f, 0.5f),  "at amount=1 HPF cutoff reaches 800 Hz (default depth)");
+    check (approx (at1.riserLevel, 0.5f, 1.0e-6f), "at amount=1 riser sits at -6 dB re the signal (default depth)");
+    check (approx (at1.delayFeedback, PreDropEngine::maxDelayFeedback, 1.0e-6f) && at1.delayFeedback <= 0.6f,
+           "delay feedback tops out at 0.6, bounding in-phase echo build-up");
 
-    // Monotonic build-up: more knob never means less of any effect.
+    // Riser level is linear in Amount, so half the knob is half the level.
+    check (approx (PreDropEngine::mapMacro (0.5f).riserLevel, 0.5f * at1.riserLevel, 1.0e-6f),
+           "riser level is linear in Amount");
+
+    // Monotonic build-up: more knob never means less of any effect. Reverb and
+    // delay are compared by level (gain x tail / feedback build-up), since their
+    // raw gains are compensated as the room and the feedback grow.
+    const auto reverbLevel = [] (const PreDropEngine::Targets& x) { return x.reverbWet * PreDropEngine::reverbWetGain (x.reverbSize); };
+    const auto delayLevel  = [] (const PreDropEngine::Targets& x) { return x.delayWet / std::sqrt (1.0f - x.delayFeedback * x.delayFeedback); };
+
     bool monotonic = true;
     PreDropEngine::Targets prev = PreDropEngine::mapMacro (0.0f);
     for (int i = 1; i <= 100; ++i)
@@ -75,52 +87,61 @@ void testMappingBoundaries()
         const auto cur = PreDropEngine::mapMacro ((float) i / 100.0f);
         monotonic = monotonic
                  && cur.hpfCutoffHz   >= prev.hpfCutoffHz   - 1.0e-3f
-                 && cur.reverbWet     >= prev.reverbWet     - 1.0e-6f
-                 && cur.delayWet      >= prev.delayWet      - 1.0e-6f
-                 && cur.riserLevel    >= prev.riserLevel    - 1.0e-6f;
+                 && cur.reverbSize    >= prev.reverbSize    - 1.0e-6f
+                 && reverbLevel (cur) >= reverbLevel (prev) - 1.0e-6f
+                 && cur.delayFeedback >= prev.delayFeedback - 1.0e-6f
+                 && delayLevel (cur)  >= delayLevel (prev)  - 1.0e-6f
+                 && cur.riserLevel    >= prev.riserLevel    - 1.0e-6f
+                 && cur.riserCutoffHz >= prev.riserCutoffHz - 1.0e-3f;
         prev = cur;
     }
-    check (monotonic, "every effect target rises monotonically with the macro");
+    check (monotonic, "every effect rises monotonically with the macro");
 }
 
-// ---- Test 1b: per-effect depth scales each effect's maximum independently. ----
+// ---- Test 1b: per-effect depth: 0 off, 0.5 balanced default, 1 doubled. --------
 void testDepthScaling()
 {
     std::printf ("Per-effect depth scaling:\n");
 
     const float eps = 1.0e-6f;
+    using Depths = PreDropEngine::Depths;
 
-    // Default depths reproduce the original fixed mapping exactly.
     const auto full = PreDropEngine::mapMacro (1.0f);
-    const auto fullExplicit = PreDropEngine::mapMacro (1.0f, PreDropEngine::Depths {});
+    const auto fullExplicit = PreDropEngine::mapMacro (1.0f, Depths {});
     check (approx (full.reverbWet, fullExplicit.reverbWet, eps)
         && approx (full.hpfCutoffHz, fullExplicit.hpfCutoffHz, eps),
-        "default Depths{} matches the original mapMacro(amount)");
+        "mapMacro(amount) uses the default depths");
+
+    const Depths defaults;
+    check (approx (defaults.hpf, 0.5f, eps) && approx (defaults.reverb, 0.5f, eps)
+        && approx (defaults.delay, 0.5f, eps) && approx (defaults.riser, 0.5f, eps),
+        "every depth defaults to 50%");
 
     // Depth 0 silences just that effect; the others are untouched.
-    PreDropEngine::Depths noReverb; noReverb.reverb = 0.0f;
+    Depths noReverb; noReverb.reverb = 0.0f;
     const auto rv0 = PreDropEngine::mapMacro (1.0f, noReverb);
-    check (rv0.reverbWet < eps,                        "reverb depth 0 silences reverb at full amount");
-    check (approx (rv0.delayWet, full.delayWet, eps),  "reverb depth 0 leaves delay untouched");
+    check (rv0.reverbWet < eps,                           "reverb depth 0 silences reverb at full amount");
+    check (approx (rv0.delayWet, full.delayWet, eps),     "reverb depth 0 leaves delay untouched");
     check (approx (rv0.riserLevel, full.riserLevel, eps), "reverb depth 0 leaves riser untouched");
 
-    PreDropEngine::Depths noDelay; noDelay.delay = 0.0f;
+    Depths noDelay; noDelay.delay = 0.0f;
     check (PreDropEngine::mapMacro (1.0f, noDelay).delayWet < eps, "delay depth 0 silences delay");
 
-    PreDropEngine::Depths noRiser; noRiser.riser = 0.0f;
+    Depths noRiser; noRiser.riser = 0.0f;
     check (PreDropEngine::mapMacro (1.0f, noRiser).riserLevel < eps, "riser depth 0 silences riser");
 
-    // Depth 0.5 halves the effect's maximum.
-    PreDropEngine::Depths halfReverb; halfReverb.reverb = 0.5f;
-    check (approx (PreDropEngine::mapMacro (1.0f, halfReverb).reverbWet, full.reverbWet * 0.5f, eps),
-           "reverb depth 0.5 halves the reverb wet maximum");
+    // Depth 1 doubles each gain-type effect relative to the default.
+    Depths maxed; maxed.reverb = 1.0f; maxed.delay = 1.0f; maxed.riser = 1.0f; maxed.hpf = 1.0f;
+    const auto mx = PreDropEngine::mapMacro (1.0f, maxed);
+    check (approx (mx.reverbWet,  2.0f * full.reverbWet,  eps), "reverb depth 100% doubles the reverb");
+    check (approx (mx.delayWet,   2.0f * full.delayWet,   eps), "delay depth 100% doubles the delay");
+    check (approx (mx.riserLevel, 2.0f * full.riserLevel, eps), "riser depth 100% doubles the riser");
 
-    // HPF depth scales the top of the sweep: 0 -> stays at 20 Hz, 1 -> ~800 Hz.
-    PreDropEngine::Depths noHpf; noHpf.hpf = 0.0f;
+    // HPF depth moves the top of the sweep: off, 800 Hz, then two octaves more.
+    Depths noHpf; noHpf.hpf = 0.0f;
     check (approx (PreDropEngine::mapMacro (1.0f, noHpf).hpfCutoffHz, 20.0f, 0.01f),
            "HPF depth 0 keeps the cutoff at 20 Hz (low-cut effectively off)");
-    check (approx (full.hpfCutoffHz, 800.0f, 1.0f),
-           "HPF depth 1 (default) still reaches ~800 Hz");
+    check (approx (mx.hpfCutoffHz, 3200.0f, 2.0f), "HPF depth 100% reaches 3.2 kHz");
 }
 
 // ---- Test 2: with the macro at zero, the effect is near-transparent. ----------
@@ -152,7 +173,7 @@ void testNearPassthroughAtZero()
 // ---- Test 3: at full tilt the output stays finite and bounded. ----------------
 void testStabilityAtFull()
 {
-    std::printf ("Stability at amount=1:\n");
+    std::printf ("Stability at amount=1, every depth at 100%%:\n");
 
     constexpr double sr = 48000.0;
     const int block = 512;
@@ -163,6 +184,10 @@ void testStabilityAtFull()
     engine.setAmount (1.0f);
     engine.setMix (1.0f);
     engine.setOutputTrimDb (0.0f);
+    engine.setHpfDepth (1.0f);
+    engine.setReverbDepth (1.0f);
+    engine.setDelayDepth (1.0f);
+    engine.setRiserDepth (1.0f);
 
     bool finite = true;
     float peak = 0.0f;
@@ -186,36 +211,124 @@ void testStabilityAtFull()
     check (peak < 8.0f, "output stays bounded (feedback does not run away)");
 }
 
-// ---- Test 3b: the riser is audible soon after its window opens. ---------------
-float riserRmsAt (float amount)
+// ---- Test 3b: reverb, delay and riser sit at the same level, in step. ----------
+// Paul Kellet's economy pink-noise filter: a broadband stand-in for a mix.
+struct PinkNoise
+{
+    juce::Random random { 2024 };
+    float b0 = 0.0f, b1 = 0.0f, b2 = 0.0f;
+
+    float next()
+    {
+        const float w = random.nextFloat() * 2.0f - 1.0f;
+        b0 = 0.99765f * b0 + w * 0.0990460f;
+        b1 = 0.96300f * b1 + w * 0.2965164f;
+        b2 = 0.57000f * b2 + w * 1.0526913f;
+        return (b0 + b1 + b2 + w * 0.1848f) * 0.25f;
+    }
+};
+
+// Renders 6 s of the same seeded pink noise (or, for the worst case, a 400 Hz
+// tone: exactly 150 cycles per 375 ms echo, so every echo lands in phase)
+// through an engine and returns the output's channel 0. HPF depth 0 keeps the
+// high-pass out of the measurement.
+std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool alignedTone = false)
 {
     constexpr double sr = 48000.0;
-    const int n = 16384;
+    constexpr int block = 512;
+    const int blocks = (int) (6.0 * sr) / block;
 
     PreDropEngine engine;
-    engine.prepare (sr, 2, n);
     engine.setAmount (amount);
-    engine.setMix (1.0f);
-    engine.setOutputTrimDb (0.0f);
+    engine.setHpfDepth (0.0f);
+    engine.setReverbDepth (depths.reverb);
+    engine.setDelayDepth (depths.delay);
+    engine.setRiserDepth (depths.riser);
+    engine.prepare (sr, 2, block);
 
-    // Silent input, so the output is the riser noise alone.
-    juce::AudioBuffer<float> buffer (2, n);
-    buffer.clear();
-    engine.process (buffer);
-    return rms (buffer, 0, n / 2, n);
+    PinkNoise noise;
+    juce::AudioBuffer<float> buffer (2, block);
+    std::vector<float> out;
+    out.reserve ((size_t) (blocks * block));
+
+    for (int b = 0; b < blocks; ++b)
+    {
+        for (int n = 0; n < block; ++n)
+        {
+            const auto i = (double) (b * block + n);
+            const float x = alignedTone ? 0.1f * (float) std::sin (juce::MathConstants<double>::twoPi * 400.0 * i / sr)
+                                        : noise.next();
+            buffer.setSample (0, n, x);
+            buffer.setSample (1, n, x);
+        }
+        engine.process (buffer);
+        for (int n = 0; n < block; ++n)
+            out.push_back (buffer.getSample (0, n));
+    }
+    return out;
 }
 
-void testRiserAudibleEarly()
+// One effect's wet level relative to the signal, in dB, over the settled last
+// 2 s: the same render with that effect switched off is subtracted out.
+float wetLevelDb (float PreDropEngine::Depths::* effect, float amount, float depth, bool alignedTone = false)
 {
-    std::printf ("Riser loudness across its window:\n");
+    PreDropEngine::Depths off;
+    off.reverb = off.delay = off.riser = 0.0f;
+    PreDropEngine::Depths on = off;
+    on.*effect = depth;
 
-    const float at70  = riserRmsAt (0.70f);
-    const float at80  = riserRmsAt (0.80f);
-    const float at100 = riserRmsAt (1.00f);
+    const auto dry = renderNoise (amount, off, alignedTone);
+    const auto wet = renderNoise (amount, on, alignedTone);
 
-    // Previously the riser sat ~36 dB below full at 70%, inaudible under a mix.
-    check (at70 > at100 * 0.18f, "riser at 70% is within 15 dB of full");
-    check (at70 < at80 && at80 < at100, "riser loudness rises across the window");
+    double signal = 0.0, effectOnly = 0.0;
+    for (size_t i = dry.size() / 3 * 2; i < dry.size(); ++i)
+    {
+        signal     += (double) dry[i] * dry[i];
+        effectOnly += (double) (wet[i] - dry[i]) * (wet[i] - dry[i]);
+    }
+    return (float) (10.0 * std::log10 (effectOnly / signal));
+}
+
+void testEffectsInSync()
+{
+    std::printf ("Reverb / delay / riser balance:\n");
+
+    using D = PreDropEngine::Depths;
+    const std::array<std::pair<const char*, float D::*>, 3> effects {{
+        { "reverb", &D::reverb }, { "delay", &D::delay }, { "riser", &D::riser } }};
+
+    // Expected: -6 dB at full Amount (default depth), -12 dB at half Amount,
+    // 0 dB at full Amount with the depth at 100%.
+    const std::array<std::array<float, 3>, 3> cases {{ { 1.0f, 0.5f, -6.02f },
+                                                       { 0.5f, 0.5f, -12.04f },
+                                                       { 1.0f, 1.0f,  0.0f } }};
+    for (const auto& c : cases)
+    {
+        float lo = 1.0e9f, hi = -1.0e9f;
+        for (const auto& [name, member] : effects)
+        {
+            const float db = wetLevelDb (member, c[0], c[1]);
+            lo = std::min (lo, db);
+            hi = std::max (hi, db);
+            check (approx (db, c[2], 1.5f),
+                   std::string (name) + " at Amount " + std::to_string ((int) (c[0] * 100)) + "%, depth "
+                     + std::to_string ((int) (c[1] * 100)) + "% sits at " + std::to_string (c[2]).substr (0, 5)
+                     + " dB re the signal (measured " + std::to_string (db).substr (0, 5) + ")");
+        }
+        check (hi - lo < 2.0f, "the three effects are within 2 dB of each other");
+    }
+
+    // Worst case for the delay: echoes that line up with the input add in
+    // phase, 1 / (1 - fb) instead of the energy sum. With feedback capped at
+    // 0.6 that is +6 dB over the balanced level, never more.
+    const float alignedDefault = wetLevelDb (&D::delay, 1.0f, 0.5f, true);
+    const float alignedMax     = wetLevelDb (&D::delay, 1.0f, 1.0f, true);
+    check (alignedDefault < 0.5f,
+           "in-phase echoes at the default depth stay at or below the signal level (measured "
+             + std::to_string (alignedDefault).substr (0, 5) + " dB)");
+    check (alignedMax < 6.5f,
+           "in-phase echoes at depth 100% stay within +6 dB of the signal (measured "
+             + std::to_string (alignedMax).substr (0, 5) + " dB)");
 }
 
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
@@ -242,21 +355,27 @@ void testVisualModelMatchesEngine()
     std::printf ("Visual model <-> engine coupling:\n");
 
     bool cutoffMatches = true;
-    for (int i = 0; i <= 100; ++i)
-    {
-        const float a = (float) i / 100.0f;
-        cutoffMatches = cutoffMatches
-                     && approx (PreDropVisualModel::cutoffHz (a), PreDropEngine::mapMacro (a).hpfCutoffHz, 0.5f);
-    }
-    check (cutoffMatches, "editor cutoff readout matches the engine HPF cutoff across the macro");
+    for (const float depth : { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f })
+        for (int i = 0; i <= 100; ++i)
+        {
+            const float a = (float) i / 100.0f;
+            PreDropEngine::Depths d; d.hpf = depth;
+            cutoffMatches = cutoffMatches
+                         && approx (PreDropVisualModel::cutoffHz (a, depth), PreDropEngine::mapMacro (a, d).hpfCutoffHz, 0.05f);
+        }
+    check (cutoffMatches, "editor cutoff readout matches the engine HPF cutoff at every amount and depth");
 
-    // The chips' engaged flags must line up with the engine's effects switching on.
-    check (PreDropEngine::mapMacro (0.19f).reverbWet  <= 0.0f && ! PreDropVisualModel::reverbEngaged (0.19f), "reverb idle below 20% in both UI and DSP");
-    check (PreDropEngine::mapMacro (0.21f).reverbWet  >  0.0f &&   PreDropVisualModel::reverbEngaged (0.21f), "reverb engaged above 20% in both UI and DSP");
-    check (PreDropEngine::mapMacro (0.39f).delayWet   <= 0.0f && ! PreDropVisualModel::delayEngaged  (0.39f), "delay idle below 40% in both UI and DSP");
-    check (PreDropEngine::mapMacro (0.41f).delayWet   >  0.0f &&   PreDropVisualModel::delayEngaged  (0.41f), "delay engaged above 40% in both UI and DSP");
-    check (PreDropEngine::mapMacro (0.59f).riserLevel <= 0.0f && ! PreDropVisualModel::riserEngaged  (0.59f), "riser idle below 60% in both UI and DSP");
-    check (PreDropEngine::mapMacro (0.61f).riserLevel >  0.0f &&   PreDropVisualModel::riserEngaged  (0.61f), "riser engaged above 60% in both UI and DSP");
+    // The chips light up exactly when the engine's effects switch on.
+    const auto at0 = PreDropEngine::mapMacro (0.0f);
+    const auto at1pc = PreDropEngine::mapMacro (0.01f);
+    check (! PreDropVisualModel::engaged (0.0f, 0.5f) && at0.reverbWet <= 0.0f && at0.riserLevel <= 0.0f,
+           "at amount=0 nothing is engaged in UI or DSP");
+    check (PreDropVisualModel::engaged (0.01f, 0.5f) && at1pc.reverbWet > 0.0f && at1pc.riserLevel > 0.0f,
+           "at amount=1% everything is engaged in UI and DSP");
+
+    PreDropEngine::Depths noDelay; noDelay.delay = 0.0f;
+    check (! PreDropVisualModel::engaged (1.0f, 0.0f) && PreDropEngine::mapMacro (1.0f, noDelay).delayWet <= 0.0f,
+           "a depth of 0 is idle in both UI and DSP");
 }
 } // namespace
 
@@ -268,7 +387,7 @@ int main()
     testDepthScaling();
     testNearPassthroughAtZero();
     testStabilityAtFull();
-    testRiserAudibleEarly();
+    testEffectsInSync();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 

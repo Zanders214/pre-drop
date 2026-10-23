@@ -12,25 +12,37 @@
 
     Each chip shows a coloured status dot whose glow tracks the effect's
     intensity, the effect abbreviation, and a live derived value (HPF cutoff;
-    reverb / delay / riser progress as a percentage). A chip is fully opaque once
-    its effect has engaged (Amount past 0 / 20 / 40 / 60 %) and dim before that.
+    reverb / delay / riser intensity, i.e. Amount x that effect's depth, as a
+    percentage). A chip is fully opaque once its effect is engaged (Amount and
+    its depth above 0) and dim before that.
 
-    Read-only: it reflects the Amount macro via PreDropVisualModel and never
-    writes a parameter, so the editor just feeds it the current Amount.
+    Read-only: it reflects Amount and the depths via PreDropVisualModel and never
+    writes a parameter, so the editor just feeds it the current values.
 */
 class EffectChips : public juce::Component
 {
 public:
     EffectChips() { setInterceptsMouseClicks (false, false); }
 
-    void setAmountSource   (std::function<float()> source) { getAmount   = std::move (source); }
-    void setHpfDepthSource (std::function<float()> source) { getHpfDepth = std::move (source); }   // optional; defaults to full depth
+    enum class Effect { hpf, reverb, delay, riser };
+
+    void setAmountSource (std::function<float()> source) { getAmount = std::move (source); }
+
+    /** Optional per effect; an effect without a source shows the default depth. */
+    void setDepthSource (Effect effect, std::function<float()> source)
+    {
+        getDepth[(size_t) effect] = std::move (source);
+    }
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
     void paint (juce::Graphics& g) override
     {
-        const float a        = getAmount    ? getAmount()    : 0.0f;
-        const float hpfDepth = getHpfDepth  ? getHpfDepth()  : 1.0f;
+        const float a = getAmount ? getAmount() : 0.0f;
+        const auto depth = [this] (Effect e)
+        {
+            const auto& source = getDepth[(size_t) e];
+            return source ? source() : defaultDepth;
+        };
         const float s = uiScale;
         const auto  bounds = getLocalBounds().toFloat();
 
@@ -45,16 +57,21 @@ public:
             juce::String  value;
         };
 
+        using M = PreDropVisualModel;
+        const auto chipFor = [&] (const char* abbrev, juce::Colour colour, Effect e)
+        {
+            const float d = depth (e);
+            const auto value = e == Effect::hpf ? Format::hertz (M::cutoffHz (a, d))
+                                                : Format::percent (M::intensity (a, d));
+            return Chip { abbrev, colour, M::intensity (a, d), M::engaged (a, d), value };
+        };
+
         const std::array<Chip, 4> chips
         {{
-            { "HPF", Palette::cyan,   juce::jmax (0.15f, PreDropVisualModel::hpfProgress (a)), true,
-              Format::hertz (PreDropVisualModel::cutoffHz (a, hpfDepth)) },
-            { "REV", Palette::violet, PreDropVisualModel::reverbProgress (a), PreDropVisualModel::reverbEngaged (a),
-              Format::percent (PreDropVisualModel::reverbProgress (a)) },
-            { "DLY", Palette::pink,   PreDropVisualModel::delayProgress (a),  PreDropVisualModel::delayEngaged (a),
-              Format::percent (PreDropVisualModel::delayProgress (a)) },
-            { "RIS", Palette::amber,  PreDropVisualModel::riserProgress (a),  PreDropVisualModel::riserEngaged (a),
-              Format::percent (PreDropVisualModel::riserProgress (a)) },
+            chipFor ("HPF", Palette::cyan,   Effect::hpf),
+            chipFor ("REV", Palette::violet, Effect::reverb),
+            chipFor ("DLY", Palette::pink,   Effect::delay),
+            chipFor ("RIS", Palette::amber,  Effect::riser),
         }};
 
         const auto  n     = (int) chips.size();
@@ -109,8 +126,10 @@ public:
     }
 
 private:
+    static constexpr float defaultDepth = 0.5f;   // matches the depth parameters' default
+
     std::function<float()> getAmount;
-    std::function<float()> getHpfDepth;
+    std::array<std::function<float()>, 4> getDepth;
     float uiScale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EffectChips)
