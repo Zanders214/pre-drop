@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792755778953,
+  "lastUpdate": 1792756963835,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -203,6 +203,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.279,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "528cebb848501ae1f58346fa5d4efbae791cc45a",
+          "message": "Merge pull request #10 from Zanders214/claude/sonar-quality-gate\n\nFix the SonarCloud quality gate and clear all 51 code smells",
+          "timestamp": "2026-10-23T14:01:24+02:00",
+          "tree_id": "8b9acf49f608e088f1ab18253cb2ec51d3cd3566",
+          "url": "https://github.com/Zanders214/pre-drop/commit/528cebb848501ae1f58346fa5d4efbae791cc45a"
+        },
+        "date": 1792756963178,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 41936.486,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.393,
             "unit": "%"
           }
         ]
