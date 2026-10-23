@@ -21,7 +21,7 @@ int main()
     proc.prepareToPlay (sr, bs);
 
     // Drive the build-up macro to 100% so HPF + reverb + delay + riser all run.
-    *proc.apvts.getRawParameterValue ("amount") = 1.0f;
+    *proc.getState().getRawParameterValue ("amount") = 1.0f;
 
     juce::AudioBuffer<float> buffer (2, bs);
     const int   blocks = (int) (sr / bs) * 2;          // ~2 s of callbacks

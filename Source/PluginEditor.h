@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <array>
 
 #include "PluginProcessor.h"
 #include "PreDropLookAndFeel.h"
@@ -27,16 +28,18 @@ public:
 
 private:
     void timerCallback() override;
-    void paintHeader (juce::Graphics&, float scale);
-    void paintSliderLabels (juce::Graphics&, float scale);
-    void paintDepthPanel (juce::Graphics&, float scale);
+    void paintHeader (juce::Graphics&, float scale) const;
+    void paintSliderLabels (juce::Graphics&, float scale) const;
+    void paintDepthPanel (juce::Graphics&, float scale) const;
     void setDepthPanelOpen (bool shouldBeOpen);
 
     PreDropAudioProcessor& processorRef;
     PreDropLookAndFeel     lnf;
     DepthKnobLookAndFeel   depthLnf;
 
-    juce::Slider amountSlider, mixSlider, trimSlider;
+    juce::Slider amountSlider;
+    juce::Slider mixSlider;
+    juce::Slider trimSlider;
     juce::TextButton effectsButton;
     EffectChips  effectChips;
     BuildUpCurve buildUpCurve;
@@ -44,22 +47,38 @@ private:
     // Per-effect depth knobs, revealed by the EFFECTS button. Index order is
     // Reverb, Delay, Riser, High-Pass (matches depthParamIds / depthNames below).
     static constexpr int numDepths = 4;
-    juce::Slider depthSliders[numDepths];
+    std::array<juce::Slider, numDepths> depthSliders;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<SliderAttachment> amountAttachment, mixAttachment, trimAttachment;
-    std::unique_ptr<SliderAttachment> depthAttachments[numDepths];
+    std::unique_ptr<SliderAttachment> amountAttachment;
+    std::unique_ptr<SliderAttachment> mixAttachment;
+    std::unique_ptr<SliderAttachment> trimAttachment;
+    std::array<std::unique_ptr<SliderAttachment>, numDepths> depthAttachments;
 
-    juce::Rectangle<int> headerArea, mixLabelArea, trimLabelArea;
-    juce::Rectangle<int> revealArea;                 // area shared by curve / depth panel
-    juce::Rectangle<int> depthKnobAreas[numDepths];  // laid out when the panel is open
-    bool  depthPanelOpen   = false;
-    int   sliderSeparatorY = 0;
+    // Painted regions computed by resized() and read back by paint().
+    struct Layout
+    {
+        juce::Rectangle<int> header;
+        juce::Rectangle<int> mixLabel;
+        juce::Rectangle<int> trimLabel;
+        juce::Rectangle<int> reveal;                                 // shared by curve / depth panel
+        std::array<juce::Rectangle<int>, numDepths> depthKnobs;      // used when the panel is open
+        int sliderSeparatorY = 0;
+    };
+    Layout layout;
+
+    bool  depthPanelOpen = false;
     float uiScale = 1.0f;
 
     // Cached parameter values so the live repaint only fires on change.
-    float lastAmount = -1.0f, lastMix = -1.0f, lastTrim = -999.0f;
-    float lastDepths[numDepths] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    struct LastValues
+    {
+        float amount = -1.0f;
+        float mix    = -1.0f;
+        float trim   = -999.0f;
+        std::array<float, numDepths> depths { -1.0f, -1.0f, -1.0f, -1.0f };
+    };
+    LastValues last;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessorEditor)
 };

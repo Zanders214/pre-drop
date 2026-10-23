@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <array>
 
 #include "PreDropTheme.h"
 #include "PreDropVisualModel.h"
@@ -93,7 +94,7 @@ public:
         // --- axis labels (space-between) -----------------------------------
         g.setFont (Fonts::mono (9.0f * s));
         g.setColour (Palette::textFaint);
-        const char* labels[5] = { "0", "25", "50", "75", "100" };
+        constexpr std::array<const char*, 5> labels { "0", "25", "50", "75", "100" };
         const float labelW = 30.0f * s;
         for (int k = 0; k < 5; ++k)
         {
@@ -102,7 +103,7 @@ public:
             float lx = anchor - labelW * 0.5f;
             if (k == 0) { just = juce::Justification::centredLeft;  lx = axisRow.getX(); }
             if (k == 4) { just = juce::Justification::centredRight; lx = axisRow.getRight() - labelW; }
-            g.drawText (labels[k], juce::Rectangle<float> (lx, axisRow.getY(), labelW, axisRow.getHeight()),
+            g.drawText (labels[(size_t) k], juce::Rectangle (lx, axisRow.getY(), labelW, axisRow.getHeight()),
                         just, false);
         }
     }

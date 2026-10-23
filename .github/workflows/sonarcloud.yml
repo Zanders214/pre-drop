@@ -27,6 +27,7 @@ jobs:
           sudo apt-get install -y \
             ninja-build \
             gcovr \
+            xvfb \
             libasound2-dev \
             libjack-jackd2-dev \
             libfreetype6-dev \

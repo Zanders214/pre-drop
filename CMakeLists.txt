@@ -120,6 +120,38 @@ if(PREDROP_BUILD_TESTS)
     endif()
 
     add_test(NAME PreDropVisualModel COMMAND PreDropVisualModelTests)
+
+    # Host-facing wrapper + editor: the real processor and UI, rendered offscreen.
+    # Built from the same translation units as the plugin, like rt_check below.
+    juce_add_console_app(PreDropPluginTests PRODUCT_NAME "PreDropPluginTests")
+    juce_generate_juce_header(PreDropPluginTests)
+    target_sources(PreDropPluginTests PRIVATE Tests/PluginTests.cpp ${PREDROP_APP_SOURCES})
+    target_include_directories(PreDropPluginTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(PreDropPluginTests PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_MODAL_LOOPS_PERMITTED=1        # lets the test pump the message loop
+        JucePlugin_Name="ZandersPreDrop")
+    target_link_libraries(PreDropPluginTests PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+    if(PREDROP_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(PreDropPluginTests PRIVATE --coverage -O0 -g)
+        target_link_options(PreDropPluginTests PRIVATE --coverage)
+    endif()
+
+    # JUCE's GUI layer needs an X display on Linux; CI has no screen, so run the
+    # editor tests inside a virtual one when xvfb-run is available.
+    set(PREDROP_GUI_TEST_LAUNCHER "")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(XVFB_RUN xvfb-run)
+        if(XVFB_RUN)
+            set(PREDROP_GUI_TEST_LAUNCHER ${XVFB_RUN} -a)
+        endif()
+    endif()
+    add_test(NAME PreDropPlugin COMMAND ${PREDROP_GUI_TEST_LAUNCHER} $<TARGET_FILE:PreDropPluginTests>)
 endif()
 
 # ---------------------------------------------------------------------------

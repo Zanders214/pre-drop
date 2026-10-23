@@ -71,6 +71,8 @@ void PreDropAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
 
 void PreDropAudioProcessor::releaseResources()
 {
+    // Nothing to free: the engine's buffers are sized once in prepareToPlay()
+    // and reused, so there is no per-session allocation to release here.
 }
 
 bool PreDropAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -108,12 +110,12 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
 juce::AudioProcessorEditor* PreDropAudioProcessor::createEditor()
 {
-    return new PreDropAudioProcessorEditor (*this);
+    return new PreDropAudioProcessorEditor (*this);   // NOSONAR(cpp:S5025): JUCE's API hands ownership of a raw pointer to the host wrapper
 }
 
 bool PreDropAudioProcessor::hasEditor() const            { return true; }
 
-const juce::String PreDropAudioProcessor::getName() const { return JucePlugin_Name; }
+const juce::String PreDropAudioProcessor::getName() const { return JucePlugin_Name; }   // NOSONAR(cpp:S5951): signature fixed by juce::AudioProcessor
 
 bool PreDropAudioProcessor::acceptsMidi() const          { return false; }
 bool PreDropAudioProcessor::producesMidi() const         { return false; }
@@ -122,9 +124,10 @@ double PreDropAudioProcessor::getTailLengthSeconds() const { return 4.0; }
 
 int PreDropAudioProcessor::getNumPrograms()              { return 1; }
 int PreDropAudioProcessor::getCurrentProgram()           { return 0; }
-void PreDropAudioProcessor::setCurrentProgram (int)      {}
-const juce::String PreDropAudioProcessor::getProgramName (int) { return {}; }
-void PreDropAudioProcessor::changeProgramName (int, const juce::String&) {}
+// A single unnamed program: there are no presets to switch to or rename.
+void PreDropAudioProcessor::setCurrentProgram (int)      { /* only program 0 exists */ }
+const juce::String PreDropAudioProcessor::getProgramName (int) { return {}; }   // NOSONAR(cpp:S5951): signature fixed by juce::AudioProcessor
+void PreDropAudioProcessor::changeProgramName (int, const juce::String&) { /* the one program has no name */ }
 
 void PreDropAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
@@ -132,7 +135,7 @@ void PreDropAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         copyXmlToBinary (*xml, destData);
 }
 
-void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInBytes)   // NOSONAR(cpp:S5008): signature fixed by juce::AudioProcessor
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
@@ -141,5 +144,5 @@ void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInByt
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new PreDropAudioProcessor();
+    return new PreDropAudioProcessor();   // NOSONAR(cpp:S5025): JUCE's plugin entry point returns an owning raw pointer
 }

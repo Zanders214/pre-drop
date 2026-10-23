@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <functional>
 
 #include "PreDropTheme.h"
@@ -22,8 +23,8 @@ class EffectChips : public juce::Component
 public:
     EffectChips() { setInterceptsMouseClicks (false, false); }
 
-    std::function<float()> getAmount;
-    std::function<float()> getHpfDepth;   // optional; defaults to full depth
+    void setAmountSource   (std::function<float()> source) { getAmount   = std::move (source); }
+    void setHpfDepthSource (std::function<float()> source) { getHpfDepth = std::move (source); }   // optional; defaults to full depth
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
     void paint (juce::Graphics& g) override
@@ -44,8 +45,8 @@ public:
             juce::String  value;
         };
 
-        const Chip chips[4] =
-        {
+        const std::array<Chip, 4> chips
+        {{
             { "HPF", Palette::cyan,   juce::jmax (0.15f, PreDropVisualModel::hpfProgress (a)), true,
               Format::hertz (PreDropVisualModel::cutoffHz (a, hpfDepth)) },
             { "REV", Palette::violet, PreDropVisualModel::reverbProgress (a), PreDropVisualModel::reverbEngaged (a),
@@ -54,9 +55,9 @@ public:
               Format::percent (PreDropVisualModel::delayProgress (a)) },
             { "RIS", Palette::amber,  PreDropVisualModel::riserProgress (a),  PreDropVisualModel::riserEngaged (a),
               Format::percent (PreDropVisualModel::riserProgress (a)) },
-        };
+        }};
 
-        const int   n     = 4;
+        const auto  n     = (int) chips.size();
         const float gap   = 7.0f * s;
         const float chipW = (bounds.getWidth() - gap * (n - 1)) / (float) n;
         const float pad   = 9.0f * s;
@@ -67,16 +68,16 @@ public:
 
         for (int i = 0; i < n; ++i)
         {
-            const auto& chip = chips[i];
+            const auto& chip = chips[(size_t) i];
             const float op = chip.engaged ? 1.0f : 0.4f;
 
-            const juce::Rectangle<float> rect (bounds.getX() + (float) i * (chipW + gap),
-                                               bounds.getY(), chipW, bounds.getHeight());
+            const juce::Rectangle rect (bounds.getX() + (float) i * (chipW + gap),
+                                        bounds.getY(), chipW, bounds.getHeight());
 
             g.setColour (Palette::chipSurface.withMultipliedAlpha (op));
             g.fillRoundedRectangle (rect, 10.0f * s);
 
-            const juce::Point<float> dot (rect.getX() + pad + dotR, rect.getCentreY());
+            const juce::Point dot (rect.getX() + pad + dotR, rect.getCentreY());
 
             // The reference binds the dot's own opacity to the effect's progress
             // (on top of the chip's engaged/idle opacity), so the dot fill — not
@@ -92,8 +93,8 @@ public:
             g.fillEllipse (juce::Rectangle<float> (dotR * 2.0f, dotR * 2.0f).withCentre (dot));
 
             const float textX = dot.x + dotR + 7.0f * s;
-            const juce::Rectangle<float> textArea (textX, rect.getY(),
-                                                   rect.getRight() - textX - pad, rect.getHeight());
+            const juce::Rectangle textArea (textX, rect.getY(),
+                                            rect.getRight() - textX - pad, rect.getHeight());
             const auto topHalf = textArea.withHeight (textArea.getHeight() * 0.5f);
             const auto botHalf = textArea.withTop (textArea.getCentreY());
 
@@ -108,6 +109,8 @@ public:
     }
 
 private:
+    std::function<float()> getAmount;
+    std::function<float()> getHpfDepth;
     float uiScale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EffectChips)
