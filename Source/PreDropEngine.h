@@ -12,20 +12,27 @@
     The DSP heart of the "pre-drop" build-up effect, deliberately kept free of any
     host / plugin plumbing so it can be unit-tested or reused on its own.
 
-    A single macro parameter ("amount", 0..1) progressively engages a chain of
-    effects, so a slow turn of one knob takes a steady loop and builds it into the
-    tension before a drop:
+    A single macro parameter ("amount", 0..1) drives four effects together, so a
+    slow turn of one knob takes a steady loop and builds it into the tension
+    before a drop:
 
         amount  0% ............................................. 100%
         HPF     |===================================================|  cut low end
-        Reverb         |=========================================|     swell space
-        Delay                  |=================================|     washed tail
-        Riser                          |=========================|     noise sweep
+        Reverb  |===================================================|  swell space
+        Delay   |===================================================|  washed tail
+        Riser   |===================================================|  noise sweep
 
-    Each effect has its own activation window inside the macro range, so they stack
-    in one at a time rather than all arriving at once. The mapping from the macro to
-    each effect's internal targets lives in mapMacro(), which is a pure function and
-    therefore the part most worth unit-testing.
+    Every effect starts with the first percent of Amount and reaches its full
+    level at 100%, all on the same curve, so they rise in step. A per-effect
+    depth (0..1) then sets how strong each one gets: 0.5 is the balanced
+    default, 0 switches the effect off and 1 doubles it.
+
+    Reverb, delay and riser run in parallel off the high-passed signal and are
+    each calibrated to the same wet level *relative to that signal*: -6 dB at
+    full Amount and depth 0.5, 0 dB at depth 1. The riser follows the signal's
+    level, so the balance holds on quiet and loud material alike. The mapping
+    from the macro to each effect's targets lives in mapMacro(), a pure function
+    and therefore the part most worth unit-testing.
 */
 class PreDropEngine
 {
@@ -36,35 +43,58 @@ public:
     struct Targets
     {
         float hpfCutoffHz   = 20.0f;   // high-pass cutoff
-        float reverbWet     = 0.0f;    // 0..1 wet amount
+        float reverbWet     = 0.0f;    // juce::dsp::Reverb wetLevel (wet-only send)
         float reverbSize    = 0.3f;    // 0..1 room size
-        float delayWet      = 0.0f;    // 0..1 echo level
+        float delayWet      = 0.0f;    // echo gain
         float delayFeedback = 0.0f;    // 0..1 feedback (clamped < 1 for stability)
-        float riserLevel    = 0.0f;    // 0..1 noise-sweep gain
+        float riserLevel    = 0.0f;    // riser RMS as a fraction of the signal's RMS
         float riserCutoffHz = 200.0f;  // band-pass centre of the riser
     };
 
-    /** Per-effect depth (0..1) scaling how strong each effect gets at full tilt.
+    /** Per-effect depth (0..1): how strong each effect gets at full Amount.
 
-        These are independent of the Amount macro, which still owns the build-up
-        *timing* (engagement windows). A depth of 1 reproduces the original fixed
-        mapping; lowering one pulls that single effect back without touching the
-        others. They default to 1 so the engine is unchanged until a user dials. */
+        0.5 is the balanced default (every effect at the same level), 0 switches
+        the effect off and 1 doubles it. Amount still owns the build-up itself;
+        depth only scales how far each effect goes. */
     struct Depths
     {
-        float hpf    = 1.0f;   // scales the top of the HPF cutoff sweep
-        float reverb = 1.0f;   // scales the reverb wet maximum
-        float delay  = 1.0f;   // scales the delay wet maximum
-        float riser  = 1.0f;   // scales the riser level maximum
+        float hpf    = 0.5f;   // top of the HPF sweep: 20 Hz (off) .. 800 Hz .. 3.2 kHz
+        float reverb = 0.5f;
+        float delay  = 0.5f;
+        float riser  = 0.5f;
     };
 
-    /** Local 0..1 progress of m inside [lo, hi], clamped. */
-    static float window (float m, float lo, float hi) noexcept
+    /** Wet level of reverb, delay and riser relative to the signal, at full
+        Amount and the default depth of 0.5 (-6 dB). */
+    static constexpr float nominalWetRatio = 0.5f;
+
+    /** Gain an effect's depth applies to its nominal level: 0 -> off,
+        0.5 -> 1x (balanced), 1 -> 2x. */
+    static float depthGain (float depth) noexcept { return 2.0f * juce::jlimit (0.0f, 1.0f, depth); }
+
+    /** Octaves above 20 Hz the HPF reaches at full Amount: 0 at depth 0 (off),
+        log2(800/20) at the default 0.5, two octaves more (3.2 kHz) at depth 1.
+        Mirrored by PreDropVisualModel::hpfTopOctaves for the cutoff readout. */
+    static float hpfTopOctaves (float depth) noexcept
     {
-        return juce::jlimit (0.0f, 1.0f, (m - lo) / (hi - lo));
+        const float d = juce::jlimit (0.0f, 1.0f, depth);
+        constexpr float nominal = 5.321928f;   // log2 (800 / 20)
+        constexpr float maximum = 7.321928f;   // log2 (3200 / 20)
+        return d <= 0.5f ? nominal * (d / 0.5f)
+                         : nominal + (maximum - nominal) * ((d - 0.5f) / 0.5f);
     }
 
-    /** Pure macro -> targets mapping with every effect at full depth. */
+    /** Wet-only gain of juce::dsp::Reverb (wetLevel 1, damping 0.4, width 1) for a
+        room size, measured on pink noise at 44.1 / 48 kHz. Its combs ring longer
+        as the room grows, so the tail gets louder; dividing by this keeps the
+        reverb at the level mapMacro asks for whatever the size. */
+    static float reverbWetGain (float roomSize) noexcept
+    {
+        const float g = roomSize * 0.28f + 0.7f;   // juce::Reverb's comb feedback
+        return (1.456f - 0.254f * roomSize) / std::sqrt (1.0f - g * g);
+    }
+
+    /** Pure macro -> targets mapping with every effect at its default depth. */
     static Targets mapMacro (float amount) noexcept { return mapMacro (amount, Depths {}); }
 
     /** Pure macro -> targets mapping. No state, so it is trivially unit-testable.
@@ -74,39 +104,34 @@ public:
         argument, so the no-depth overload above delegates from its body. */
     static Targets mapMacro (float amount, Depths depth) noexcept
     {
-        const float m = juce::jlimit (0.0f, 1.0f, amount);
+        const float p = juce::jlimit (0.0f, 1.0f, amount);
         Targets t;
 
-        // 1. High-pass: always engaged, exponential cutoff with a slow start.
-        //    Depth scales the top of the sweep: depth=1 -> 800 Hz (original),
-        //    depth=0 -> stays at 20 Hz so the low-cut is effectively off.
-        const float h     = std::pow (window (m, 0.0f, 1.0f), 1.5f);
-        const float topHz = 20.0f + (800.0f - 20.0f) * juce::jlimit (0.0f, 1.0f, depth.hpf);
-        t.hpfCutoffHz = 20.0f * std::pow (topHz / 20.0f, h);          // 20 -> (20..800) Hz
+        // 1. High-pass: sweeps up evenly in pitch (octaves) as Amount rises.
+        t.hpfCutoffHz = 20.0f * std::exp2 (hpfTopOctaves (depth.hpf) * p);
 
-        // 2. Reverb: engages at 20%.
-        const float r = window (m, 0.20f, 1.0f);
-        t.reverbWet  = 0.60f * r * juce::jlimit (0.0f, 1.0f, depth.reverb);
-        t.reverbSize = 0.30f + 0.65f * r;
+        // 2. Reverb: the room grows with Amount; the wet send is compensated for
+        //    the louder tail so its level rises in step with the others.
+        t.reverbSize = 0.30f + 0.65f * p;
+        t.reverbWet  = nominalWetRatio * depthGain (depth.reverb) * p / reverbWetGain (t.reverbSize);
 
-        // 3. Delay: engages at 40%, feedback clamped for stability.
-        const float d = window (m, 0.40f, 1.0f);
-        t.delayWet      = 0.50f * d * juce::jlimit (0.0f, 1.0f, depth.delay);
-        t.delayFeedback = std::min (0.85f * d, 0.95f);
+        // 3. Delay: feedback grows with Amount, and the echo gain is scaled by
+        //    sqrt(1 - fb^2) because a feedback loop's steady-state energy is
+        //    1 / (1 - fb^2) times one echo; this holds the delay level in step.
+        t.delayFeedback = std::min (0.85f * p, 0.95f);
+        t.delayWet      = nominalWetRatio * depthGain (depth.delay) * p
+                        * std::sqrt (1.0f - t.delayFeedback * t.delayFeedback);
 
-        // 4. Riser: engages at 60% and fades in linearly. A linear gain already
-        //    reads as a fast-then-gentle rise in dB, so it is audible soon after
-        //    the window opens rather than only in the last 10-20%. process()
-        //    normalises the band-pass loudness, so this is the perceived level.
-        const float s = window (m, 0.60f, 1.0f);
-        t.riserLevel    = 0.70f * s * juce::jlimit (0.0f, 1.0f, depth.riser);
-        t.riserCutoffHz = 200.0f * std::pow (8000.0f / 200.0f, s);     // 200 -> 8k Hz
+        // 4. Riser: level relative to the signal, sweeping 200 Hz -> 8 kHz.
+        t.riserLevel    = nominalWetRatio * depthGain (depth.riser) * p;
+        t.riserCutoffHz = 200.0f * std::pow (8000.0f / 200.0f, p);
 
         return t;
     }
 
     void prepare (double sampleRate, int numChannels, int maximumBlockSize)
     {
+        sr    = sampleRate;
         numCh = juce::jmax (1, numChannels);
 
         juce::dsp::ProcessSpec spec;
@@ -117,17 +142,22 @@ public:
         hpf.prepare (spec);
         hpf.setType (juce::dsp::StateVariableTPTFilterType::highpass);
 
-        riserFilter.prepare (spec);
-        riserFilter.setType (juce::dsp::StateVariableTPTFilterType::bandpass);
-        riserFilter.setResonance (1.5f);
+        riser.filter.prepare (spec);
+        riser.filter.setType (juce::dsp::StateVariableTPTFilterType::bandpass);
+        riser.filter.setResonance (1.5f);
 
+        // Set the reverb's parameters before preparing it: prepare() snaps its
+        // internal smoothers, so the wet-only send starts with no dry leaking in.
+        const Targets t = mapMacro (amount, depths);
+        applyReverbParameters (t.reverbSize, t.reverbWet);
         reverb.prepare (spec);
 
         delayLine.setMaximumDelayInSamples (maxDelaySamples);
         delayLine.prepare (spec);
         delayLine.setDelay ((float) (delayTimeSeconds * sampleRate));
 
-        dryBuffer.setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
+        dryBuffer   .setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
+        reverbBuffer.setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
 
         const double ramp = 0.04; // 40 ms, fast enough to track but kills zipper noise
         sm.hpfCutoff  .reset (sampleRate, ramp);
@@ -141,14 +171,13 @@ public:
         sm.trim       .reset (sampleRate, ramp);
 
         // Snap smoothers to the current targets so the first block does not sweep.
-        const Targets t = mapMacro (amount, depths);
         sm.hpfCutoff  .setCurrentAndTargetValue (t.hpfCutoffHz);
         sm.reverbWet  .setCurrentAndTargetValue (t.reverbWet);
         sm.reverbSize .setCurrentAndTargetValue (t.reverbSize);
         sm.delayWet   .setCurrentAndTargetValue (t.delayWet);
         sm.delayFb    .setCurrentAndTargetValue (t.delayFeedback);
         sm.riserLevel .setCurrentAndTargetValue (t.riserLevel);
-        sm.riserCutoff.setCurrentAndTargetValue (t.riserCutoffHz);
+        sm.riserCutoff.setCurrentAndTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sampleRate));
         sm.mix        .setCurrentAndTargetValue (mix);
         sm.trim       .setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
 
@@ -158,13 +187,16 @@ public:
     void reset()
     {
         hpf.reset();
-        riserFilter.reset();
+        riser.filter.reset();
         reverb.reset();
         delayLine.reset();
 
-        // Re-prime the coefficient cache so the next block re-applies the cutoffs.
-        lastHpfCutoff   = -1.0f;
-        lastRiserCutoff = -1.0f;
+        // Re-prime the coefficient caches so the next block re-applies the
+        // cutoffs, and let the riser's level follower start from silence.
+        lastHpfCutoff      = -1.0f;
+        riser.lastCutoff   = -1.0f;
+        riser.meanSquare   = 0.0f;
+        riser.signalRms    = 0.0f;
     }
 
     void setAmount       (float newAmount) noexcept { amount       = newAmount; }
@@ -199,7 +231,7 @@ public:
         sm.delayWet   .setTargetValue (t.delayWet);
         sm.delayFb    .setTargetValue (t.delayFeedback);
         sm.riserLevel .setTargetValue (t.riserLevel);
-        sm.riserCutoff.setTargetValue (t.riserCutoffHz);
+        sm.riserCutoff.setTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sr));   // clear of Nyquist
         sm.mix        .setTargetValue (mix);
         sm.trim       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
 
@@ -221,29 +253,39 @@ public:
                 data[ch][n] = hpf.processSample (ch, data[ch][n]);
         }
 
-        // --- 2. Reverb (block based; params are not zipper-prone) ---------------
+        // The high-passed signal is what reverb, delay and riser all ride on; the
+        // riser follows its level (smoothed over ~0.4 s) so it stays in step.
+        const float riserRmsStart = riser.signalRms;
         {
-            const float wet  = sm.reverbWet.skip (numSamples);
+            double sum = 0.0;
+            for (int ch = 0; ch < channels; ++ch)
+                for (int n = 0; n < numSamples; ++n)
+                    sum += (double) data[ch][n] * data[ch][n];
+
+            const auto blockMeanSquare = (float) (sum / (double) (numSamples * channels));
+            const auto coeff = (float) (1.0 - std::exp (-(double) numSamples / (riserFollowSeconds * sr)));
+            riser.meanSquare += coeff * (blockMeanSquare - riser.meanSquare);
+            riser.signalRms   = std::sqrt (riser.meanSquare);
+        }
+
+        // --- 2. Reverb, wet only, on a copy of the high-passed signal ------------
+        const int reverbChannels = juce::jmin (channels, 2);
+        {
             const float size = sm.reverbSize.skip (numSamples);
+            applyReverbParameters (size, sm.reverbWet.skip (numSamples));
 
-            // juce::dsp::Reverb scales dry by 2x and wet by 3x internally, so a
-            // dryLevel of 0.5 is unity. Crossfade dry from unity (wet=0) to 0.
-            reverbParams.roomSize   = size;
-            reverbParams.wetLevel   = wet;
-            reverbParams.dryLevel   = 0.5f * (1.0f - wet);
-            reverbParams.damping    = 0.4f;
-            reverbParams.width      = 1.0f;
-            reverbParams.freezeMode = 0.0f;
-            reverb.setParameters (reverbParams);
+            for (int ch = 0; ch < reverbChannels; ++ch)
+                reverbBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
-            const auto reverbChannels = (size_t) juce::jmin (channels, 2);
-            juce::dsp::AudioBlock<float> block (buffer);
-            auto subBlock = block.getSubsetChannelBlock (0, reverbChannels);
+            juce::dsp::AudioBlock<float> block (reverbBuffer);
+            auto subBlock = block.getSubsetChannelBlock (0, (size_t) reverbChannels)
+                                 .getSubBlock (0, (size_t) numSamples);
             juce::dsp::ProcessContextReplacing ctx (subBlock);
             reverb.process (ctx);
         }
 
-        // --- 3. Delay / echo with feedback (per sample) -------------------------
+        // --- 3. Delay / echo with feedback, then sum signal + echoes + reverb -----
+        auto* const* reverbWet = reverbBuffer.getArrayOfReadPointers();
         for (int n = 0; n < numSamples; ++n)
         {
             const float wet = sm.delayWet.getNextValue();
@@ -254,30 +296,30 @@ public:
                 const float in      = data[ch][n];
                 const float delayed = delayLine.popSample (ch);
                 delayLine.pushSample (ch, in + delayed * fb);
-                data[ch][n] = in + delayed * wet;
+                data[ch][n] = in + delayed * wet + (ch < reverbChannels ? reverbWet[ch][n] : 0.0f);
             }
         }
 
         // --- 4. Riser / filtered-noise sweep (summed in parallel) ---------------
+        const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
+        float signalRms = riserRmsStart;
         for (int n = 0; n < numSamples; ++n)
         {
             const float level = sm.riserLevel.getNextValue();
+            signalRms += rmsStep;
 
             // Same coefficient caching as the HPF: skip the per-sample std::tan
-            // when the band-pass centre is parked. A constant-Q band-pass passes
-            // noise power proportional to its centre frequency, so at 200 Hz it is
-            // ~16 dB quieter than at 8 kHz; scaling by sqrt(ref / fc) holds the
-            // noise at its 8 kHz loudness across the sweep, and is recomputed
-            // alongside the coefficient rather than every sample.
-            if (const float cutoff = sm.riserCutoff.getNextValue(); ! juce::exactlyEqual (cutoff, lastRiserCutoff))
+            // when the band-pass centre is parked. The gain that brings the
+            // band-passed noise to unit RMS is recomputed alongside it.
+            if (const float cutoff = sm.riserCutoff.getNextValue(); ! juce::exactlyEqual (cutoff, riser.lastCutoff))
             {
-                riserFilter.setCutoffFrequency (cutoff);
-                riserNorm       = std::sqrt (riserNormRefHz / cutoff);
-                lastRiserCutoff = cutoff;
+                riser.filter.setCutoffFrequency (cutoff);
+                riser.unitGain   = unitRmsGain (cutoff);
+                riser.lastCutoff = cutoff;
             }
 
             const float noise    = random.nextFloat() * 2.0f - 1.0f;
-            const float filtered = riserFilter.processSample (0, noise) * riserNorm * level;
+            const float filtered = riser.filter.processSample (0, noise) * riser.unitGain * level * signalRms;
 
             for (int ch = 0; ch < channels; ++ch)
                 data[ch][n] += filtered;
@@ -296,34 +338,64 @@ public:
     }
 
 private:
-    static constexpr int maxDelaySamples = 192000; // up to ~2 s even at 96 kHz
+    void applyReverbParameters (float roomSize, float wetLevel)
+    {
+        juce::dsp::Reverb::Parameters params;
+        params.roomSize   = roomSize;
+        params.wetLevel   = wetLevel;
+        params.dryLevel   = 0.0f;   // wet only: the signal is summed back in process()
+        params.damping    = 0.4f;
+        params.width      = 1.0f;
+        params.freezeMode = 0.0f;
+        reverb.setParameters (params);
+    }
 
-    int numCh = 2;
+    static constexpr int maxDelaySamples = 192000; // up to ~2 s even at 96 kHz
+    static constexpr double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
+    static constexpr double riserFollowSeconds = 0.4; // riser level-follower time constant
+
+    // Gain that brings uniform [-1, 1] noise through the riser's Q = 1.5
+    // band-pass to unit RMS. A constant-Q band-pass passes noise power in
+    // proportion to fc / fs, narrowing near Nyquist; measured at 44.1 / 48 /
+    // 96 kHz from 200 Hz to 8 kHz, RMS = 1.215 sqrt(x) sin(2 pi x) / (2 pi x)
+    // with x = fc / fs, to within 0.25 dB.
+    float unitRmsGain (float cutoffHz) const noexcept
+    {
+        const double x     = (double) cutoffHz / sr;
+        const double twoPx = juce::MathConstants<double>::twoPi * x;
+        return (float) (1.0 / (1.215 * std::sqrt (x) * std::sin (twoPx) / twoPx));
+    }
+
+    double sr    = 44100.0;
+    int    numCh = 2;
 
     float amount       = 0.0f;
     float mix          = 1.0f;
     float outputTrimDb = 0.0f;
     Depths depths;
 
-    static constexpr double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
-
     juce::dsp::StateVariableTPTFilter<float> hpf;
-    juce::dsp::StateVariableTPTFilter<float> riserFilter;
     juce::dsp::Reverb                        reverb;
-    juce::dsp::Reverb::Parameters            reverbParams;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine { maxDelaySamples };
     juce::Random                             random;
     juce::AudioBuffer<float>                 dryBuffer;
+    juce::AudioBuffer<float>                 reverbBuffer;
 
-    // Last cutoff pushed to each TPT filter, so process() can skip recomputing an
+    // Last cutoff pushed to the HPF, so process() can skip recomputing an
     // identical coefficient (an std::tan) every sample. -1 forces the first apply.
-    float lastHpfCutoff   = -1.0f;
-    float lastRiserCutoff = -1.0f;
+    float lastHpfCutoff = -1.0f;
 
-    // Riser band-pass loudness compensation, referenced to the top of the sweep
-    // so the full-tilt riser level is unchanged.
-    static constexpr float riserNormRefHz = 8000.0f;
-    float riserNorm = 1.0f;
+    // The noise riser: its band-pass, coefficient cache, unit-RMS gain for the
+    // current centre, and the level follower that ties it to the signal.
+    struct Riser
+    {
+        juce::dsp::StateVariableTPTFilter<float> filter;
+        float lastCutoff = -1.0f;
+        float unitGain   = 1.0f;
+        float meanSquare = 0.0f;
+        float signalRms  = 0.0f;
+    };
+    Riser riser;
 
     // One ramp per mapped target, so every parameter change glides instead of
     // stepping. Cutoffs ramp multiplicatively (even in pitch), the rest linearly.

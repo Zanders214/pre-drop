@@ -4,19 +4,22 @@
 
 A one-knob "build-up" effect plugin for DAWs (VST3 / AU / Standalone), built with
 [JUCE](https://juce.com). Turn a steady loop into the tension before a drop with a
-single macro: as **Amount** rises, the plugin progressively cuts the low end, swells
-reverb, washes the signal out with delay, and lifts a filtered-noise riser underneath.
+single macro: as **Amount** rises, the plugin cuts the low end, swells reverb, washes
+the signal out with delay, and lifts a filtered-noise riser underneath, all together.
 
 ```
 Amount  0% ............................................. 100%
 HPF     |===================================================|  cut low end
-Reverb         |=========================================|     swell space
-Delay                  |=================================|     washed tail
-Riser                          |=========================|     noise sweep
+Reverb  |===================================================|  swell space
+Delay   |===================================================|  washed tail
+Riser   |===================================================|  noise sweep
 ```
 
-Each effect has its own activation window inside the macro range, so they stack in one
-at a time instead of all arriving at once.
+Every effect starts with the first percent of Amount and reaches its full level at
+100%, on the same curve, so they rise in step. Reverb, delay and riser are calibrated
+to the same level relative to your signal (-6 dB at full Amount with the effect
+knobs at their 50% default), and the riser follows your track's loudness, so the
+balance holds on quiet and loud material alike.
 
 ## Controls
 
@@ -25,6 +28,7 @@ at a time instead of all arriving at once.
 | **Amount**  | The macro. Drives the whole build-up from 0% (clean) to 100% (peak). |
 | **Mix**     | Global dry/wet so the build-up can sit under the source.             |
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
+| **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
 
@@ -75,10 +79,10 @@ Tests/
 
 The editor recreates the **"Direction D — Neon Clean"** design natively in JUCE
 (no WebView): a multicolour progress-ring **Amount** knob with a centred readout,
-four effect status chips that light up as each effect engages (HPF 0% → Reverb
-20% → Delay 40% → Riser 60%), a live build-up energy histogram you can also drag
-to set Amount, and Mix / Output sliders. Indicator values are derived from the
-macro through `PreDropVisualModel`, whose cutoff/threshold math is unit-tested
+four effect status chips (the HPF cutoff, and each other effect's Amount × depth), a
+live build-up energy histogram you can also drag to set Amount, Mix / Output sliders,
+and the EFFECTS panel of depth knobs. Indicator values are derived from Amount and
+the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
 against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).
 

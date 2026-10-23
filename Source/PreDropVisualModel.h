@@ -7,15 +7,15 @@
     PreDropVisualModel
 
     Pure, framework-free numeric model behind the Pre-Drop editor's "Neon Clean"
-    UI. It turns the single Amount macro (0..1) into the per-effect engagement
-    progress, the displayed high-pass cutoff, and the decorative "build-up
-    energy" curve used by the histogram + tension readout.
+    UI. It turns the Amount macro (0..1) and the per-effect depths into what the
+    effect chips show, the displayed high-pass cutoff, and the decorative
+    "build-up energy" curve used by the histogram + tension readout.
 
-    The per-effect activation windows and the HPF cutoff sweep here intentionally
-    mirror PreDropEngine::mapMacro so the on-screen indicators never drift from
-    the DSP: the thresholds (0 / 20 / 40 / 60 %) and the 20 -> 800 Hz cutoff are
-    the authoritative ones from the engine. The energy curve (energyAt) is purely
-    cosmetic — it only shapes the histogram and is not part of the audio path.
+    It intentionally mirrors PreDropEngine::mapMacro so the on-screen indicators
+    never drift from the DSP: every effect starts with the first percent of
+    Amount, and the HPF sweep (20 Hz -> 800 Hz at the default depth of 0.5, up to
+    3.2 kHz at depth 1) is the engine's. The energy curve (energyAt) is purely
+    cosmetic: it only shapes the histogram and is not part of the audio path.
 
     Kept header-only and dependency-free (just <cmath>/<algorithm>) so it can be
     unit-tested on any platform without JUCE or a display.
@@ -24,40 +24,31 @@ struct PreDropVisualModel
 {
     static float clamp01 (float x) noexcept { return std::min (1.0f, std::max (0.0f, x)); }
 
-    /** Local 0..1 progress of a inside [lo, hi], clamped. Mirrors PreDropEngine::window. */
-    static float window (float a, float lo, float hi) noexcept
+    /** How far one effect has gone, 0..1: Amount times that effect's depth knob,
+        as shown on its chip. All four effects share the same build-up. */
+    static float intensity (float amount, float depth) noexcept { return clamp01 (amount) * clamp01 (depth); }
+
+    /** An effect is engaged (chip lit) as soon as Amount and its depth are above 0. */
+    static bool engaged (float amount, float depth) noexcept { return amount > 0.0f && depth > 0.0f; }
+
+    /** Octaves above 20 Hz the HPF reaches at full Amount. Mirrors
+        PreDropEngine::hpfTopOctaves: off at depth 0, 800 Hz at 0.5, 3.2 kHz at 1. */
+    static float hpfTopOctaves (float hpfDepth) noexcept
     {
-        return clamp01 ((a - lo) / (hi - lo));
+        const float d = clamp01 (hpfDepth);
+        constexpr float nominal = 5.321928f;   // log2 (800 / 20)
+        constexpr float maximum = 7.321928f;   // log2 (3200 / 20)
+        return d <= 0.5f ? nominal * (d / 0.5f)
+                         : nominal + (maximum - nominal) * ((d - 0.5f) / 0.5f);
     }
 
-    // --- Per-effect engagement progress (0..1). Thresholds match the engine. ----
-    static float hpfProgress    (float a) noexcept { return std::pow (clamp01 (a), 1.5f); }
-    static float reverbProgress (float a) noexcept { return window (a, 0.20f, 1.0f); }
-    static float delayProgress  (float a) noexcept { return window (a, 0.40f, 1.0f); }
-    static float riserProgress  (float a) noexcept { return window (a, 0.60f, 1.0f); }
-
-    /** Displayed high-pass cutoff in Hz: 20 -> (20..800), log-swept. Equals
-        mapMacro's hpfCutoffHz. hpfDepth scales the top of the sweep (default 1
-        -> 800 Hz) so the chip readout tracks the HPF depth control. */
-    static float cutoffHz (float a, float hpfDepth = 1.0f) noexcept
+    /** Displayed high-pass cutoff in Hz; equals mapMacro's hpfCutoffHz. */
+    static float cutoffHz (float a, float hpfDepth = 0.5f) noexcept
     {
-        const float topHz = 20.0f + (800.0f - 20.0f) * clamp01 (hpfDepth);
-        return 20.0f * std::pow (topHz / 20.0f, hpfProgress (a));
+        return 20.0f * std::exp2 (hpfTopOctaves (hpfDepth) * clamp01 (a));
     }
 
-    // --- Engagement thresholds, for chip opacity (engaged vs idle). -------------
-    static bool reverbEngaged (float a) noexcept { return a >= 0.20f; }
-    static bool delayEngaged  (float a) noexcept { return a >= 0.40f; }
-    static bool riserEngaged  (float a) noexcept { return a >= 0.60f; }
-
-    /** Composite build-up energy at position x in 0..1 (decorative histogram shape). */
-    static float energyAt (float x) noexcept
-    {
-        const float hp  = std::pow (clamp01 (x), 1.5f);
-        const float rv  = clamp01 ((x - 0.20f) / 0.80f);
-        const float dl  = clamp01 ((x - 0.40f) / 0.60f);
-        const float rsW = clamp01 ((x - 0.60f) / 0.40f);
-        const float rs  = rsW * rsW;
-        return std::min (1.0f, hp * 0.20f + rv * 0.22f + dl * 0.24f + rs * 0.46f);
-    }
+    /** Composite build-up energy at position x in 0..1 (decorative histogram
+        shape). Every effect rises with Amount on the same curve, so it does too. */
+    static float energyAt (float x) noexcept { return clamp01 (x); }
 };

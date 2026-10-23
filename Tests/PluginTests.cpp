@@ -100,25 +100,31 @@ int pixelsChanged (const juce::Image& a, const juce::Image& b)
     return changed;
 }
 
-// Runs blocks through the processor's real audio callback and returns the RMS
-// of the final block, by which time the 40 ms parameter ramps have settled.
-float settledRms (PreDropAudioProcessor& p, int block, int blocks, bool silentInput)
+// Runs a sine through the processor's real audio callback and returns how far
+// the final block's output is from its input (RMS of the difference), by which
+// time the 40 ms parameter ramps have settled.
+float settledChange (PreDropAudioProcessor& p, int block, int blocks)
 {
     juce::MidiBuffer midi;
     juce::AudioBuffer<float> buffer (2, block);
+    juce::AudioBuffer<float> input (2, block);
 
     for (int b = 0; b < blocks; ++b)
     {
         for (int ch = 0; ch < 2; ++ch)
             for (int n = 0; n < block; ++n)
-                buffer.setSample (ch, n, silentInput ? 0.0f : 0.5f * std::sin (0.05f * (float) (b * block + n)));
+                input.setSample (ch, n, 0.5f * std::sin (0.05f * (float) (b * block + n)));
 
+        buffer.makeCopyOf (input, true);
         p.processBlock (buffer, midi);
     }
 
     double sum = 0.0;
     for (int n = 0; n < block; ++n)
-        sum += (double) buffer.getSample (0, n) * buffer.getSample (0, n);
+    {
+        const double d = (double) buffer.getSample (0, n) - input.getSample (0, n);
+        sum += d * d;
+    }
     return (float) std::sqrt (sum / block);
 }
 
@@ -157,7 +163,7 @@ void testProcessorBasics()
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
     check (approx (param (p, "outputTrim"), 0.0f, 1.0e-6f), "output trim defaults to 0 dB");
     for (auto* id : { "reverbDepth", "delayDepth", "riserDepth", "hpfDepth" })
-        check (approx (param (p, id), 1.0f, 1.0e-6f), std::string (id) + " defaults to full depth");
+        check (approx (param (p, id), 0.5f, 1.0e-6f), std::string (id) + " defaults to the balanced 50%");
 
     check (p.getState().getParameter ("amount")->getText (0.5f, 16) == "50 %", "amount displays as a percentage");
 }
@@ -215,15 +221,15 @@ void testProcessing()
     check (finite, "output stays finite at full build-up");
     check (peak > 0.01f && peak < 8.0f, "output is audible and bounded");
 
-    // Prove the callback really runs the effect chain: with silent input, only
-    // the engine's noise riser can make sound, and pulling Mix to 0 must return
-    // the (silent) dry signal once the smoothers settle.
-    const float riserRms = settledRms (p, block, 20, true);
-    check (riserRms > 0.01f, "silent input at full Amount produces the riser through the processor");
+    // Prove the callback really runs the effect chain: at full Amount the output
+    // must clearly differ from the input, and pulling Mix to 0 must return the
+    // untouched dry signal once the smoothers settle.
+    const float wetChange = settledChange (p, block, 40);
+    check (wetChange > 0.05f, "at full Amount the processor audibly changes the signal");
 
     setParam (p, "mix", 0.0f);
-    const float dryRms = settledRms (p, block, 20, true);
-    check (dryRms < 1.0e-6f, "Mix at 0 passes the silent dry signal through untouched");
+    const float dryChange = settledChange (p, block, 20);
+    check (dryChange < 1.0e-5f, "Mix at 0 passes the dry signal through untouched");
     p.releaseResources();
 }
 
@@ -380,7 +386,7 @@ void testUnboundIndicators()
 {
     std::printf ("Indicators without a data source:\n");
 
-    // Chips with no Amount / HPF-depth source fall back to idle / full depth.
+    // Chips with no Amount / depth sources fall back to idle / the default depth.
     EffectChips chips;
     chips.setSize (308, 40);
     check (hasDetail (render (chips)), "chips render with no data source");
