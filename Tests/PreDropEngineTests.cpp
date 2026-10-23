@@ -186,6 +186,38 @@ void testStabilityAtFull()
     check (peak < 8.0f, "output stays bounded (feedback does not run away)");
 }
 
+// ---- Test 3b: the riser is audible soon after its window opens. ---------------
+float riserRmsAt (float amount)
+{
+    constexpr double sr = 48000.0;
+    const int n = 16384;
+
+    PreDropEngine engine;
+    engine.prepare (sr, 2, n);
+    engine.setAmount (amount);
+    engine.setMix (1.0f);
+    engine.setOutputTrimDb (0.0f);
+
+    // Silent input, so the output is the riser noise alone.
+    juce::AudioBuffer<float> buffer (2, n);
+    buffer.clear();
+    engine.process (buffer);
+    return rms (buffer, 0, n / 2, n);
+}
+
+void testRiserAudibleEarly()
+{
+    std::printf ("Riser loudness across its window:\n");
+
+    const float at70  = riserRmsAt (0.70f);
+    const float at80  = riserRmsAt (0.80f);
+    const float at100 = riserRmsAt (1.00f);
+
+    // Previously the riser sat ~36 dB below full at 70%, inaudible under a mix.
+    check (at70 > at100 * 0.18f, "riser at 70% is within 15 dB of full");
+    check (at70 < at80 && at80 < at100, "riser loudness rises across the window");
+}
+
 // ---- Test 4: the editor's visual model stays in lock-step with the DSP. --------
 void testVisualModelMatchesEngine()
 {
@@ -218,6 +250,7 @@ int main()
     testDepthScaling();
     testNearPassthroughAtZero();
     testStabilityAtFull();
+    testRiserAudibleEarly();
     testVisualModelMatchesEngine();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
