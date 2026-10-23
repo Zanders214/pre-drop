@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -75,6 +76,50 @@ ComponentType* findChild (juce::Component& parent)
         if (auto* match = dynamic_cast<ComponentType*> (child))
             return match;
     return nullptr;
+}
+
+// All direct children of a type, in the order the editor added them.
+template <typename ComponentType>
+std::vector<ComponentType*> findChildren (juce::Component& parent)
+{
+    std::vector<ComponentType*> found;
+    for (auto* child : parent.getChildren())
+        if (auto* match = dynamic_cast<ComponentType*> (child))
+            found.push_back (match);
+    return found;
+}
+
+// How many sampled pixels differ between two same-sized renders.
+int pixelsChanged (const juce::Image& a, const juce::Image& b)
+{
+    int changed = 0;
+    for (int y = 0; y < a.getHeight(); y += 2)
+        for (int x = 0; x < a.getWidth(); x += 2)
+            if (a.getPixelAt (x, y) != b.getPixelAt (x, y))
+                ++changed;
+    return changed;
+}
+
+// Runs blocks through the processor's real audio callback and returns the RMS
+// of the final block, by which time the 40 ms parameter ramps have settled.
+float settledRms (PreDropAudioProcessor& p, int block, int blocks, bool silentInput)
+{
+    juce::MidiBuffer midi;
+    juce::AudioBuffer<float> buffer (2, block);
+
+    for (int b = 0; b < blocks; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < block; ++n)
+                buffer.setSample (ch, n, silentInput ? 0.0f : 0.5f * std::sin (0.05f * (float) (b * block + n)));
+
+        p.processBlock (buffer, midi);
+    }
+
+    double sum = 0.0;
+    for (int n = 0; n < block; ++n)
+        sum += (double) buffer.getSample (0, n) * buffer.getSample (0, n);
+    return (float) std::sqrt (sum / block);
 }
 
 void pumpMessages (int milliseconds)
@@ -169,6 +214,16 @@ void testProcessing()
 
     check (finite, "output stays finite at full build-up");
     check (peak > 0.01f && peak < 8.0f, "output is audible and bounded");
+
+    // Prove the callback really runs the effect chain: with silent input, only
+    // the engine's noise riser can make sound, and pulling Mix to 0 must return
+    // the (silent) dry signal once the smoothers settle.
+    const float riserRms = settledRms (p, block, 20, true);
+    check (riserRms > 0.01f, "silent input at full Amount produces the riser through the processor");
+
+    setParam (p, "mix", 0.0f);
+    const float dryRms = settledRms (p, block, 20, true);
+    check (dryRms < 1.0e-6f, "Mix at 0 passes the silent dry signal through untouched");
     p.releaseResources();
 }
 
@@ -220,6 +275,50 @@ void testEditor()
         allDetailed = allDetailed && hasDetail (render (*editor));
     }
     check (allDetailed, "editor renders across the whole Amount range");
+
+    // Controls and parameters must be wired both ways: automation moves the
+    // knob / sliders, and moving a control writes its parameter. Children are in
+    // the order the editor adds them: Amount knob, Mix, Output, then the depths.
+    const auto sliders = findChildren<juce::Slider> (*editor);
+    check (sliders.size() == 7, "editor has the Amount knob, two sliders and four depth knobs");
+    if (sliders.size() != 7)
+        return;
+
+    auto* knob = sliders[0];
+    auto* mix  = sliders[1];
+    auto* trim = sliders[2];
+    auto* reverbDepth = sliders[3];
+    check (knob->getSliderStyle() == juce::Slider::RotaryVerticalDrag && knob->isVisible()
+             && mix->getSliderStyle() == juce::Slider::LinearHorizontal
+             && trim->getSliderStyle() == juce::Slider::LinearHorizontal,
+           "controls are laid out as knob, Mix, Output");
+
+    setParam (p, "amount", 0.42f);
+    setParam (p, "mix", 0.3f);
+    setParam (p, "outputTrim", -6.0f);
+    setParam (p, "reverbDepth", 0.2f);
+    pumpMessages (60);
+    check (approx ((float) knob->getValue(), 0.42f, 1.0e-3f), "Amount automation moves the knob");
+    check (approx ((float) mix->getValue(), 0.3f, 1.0e-3f), "Mix automation moves the Mix slider");
+    check (approx ((float) trim->getValue(), -6.0f, 0.05f), "Output automation moves the Output slider");
+    check (approx ((float) reverbDepth->getValue(), 0.2f, 1.0e-3f), "depth automation moves its knob");
+
+    knob->setValue (0.8, juce::sendNotificationSync);
+    mix->setValue (0.6, juce::sendNotificationSync);
+    trim->setValue (2.0, juce::sendNotificationSync);
+    reverbDepth->setValue (0.9, juce::sendNotificationSync);
+    check (approx (param (p, "amount"), 0.8f, 1.0e-3f), "turning the knob sets Amount");
+    check (approx (param (p, "mix"), 0.6f, 1.0e-3f), "moving the Mix slider sets Mix");
+    check (approx (param (p, "outputTrim"), 2.0f, 0.05f), "moving the Output slider sets Output Trim");
+    check (approx (param (p, "reverbDepth"), 0.9f, 1.0e-3f), "turning a depth knob sets its depth");
+
+    // The knob itself must visibly track Amount (ring arc, pointer, readout).
+    setParam (p, "amount", 0.0f);
+    pumpMessages (60);
+    const auto knobAtZero = render (*knob);
+    setParam (p, "amount", 1.0f);
+    pumpMessages (60);
+    check (pixelsChanged (knobAtZero, render (*knob)) > 200, "the Amount knob redraws when Amount changes");
 
     auto* button = findChild<juce::TextButton> (*editor);
     auto* curve  = findChild<BuildUpCurve> (*editor);
