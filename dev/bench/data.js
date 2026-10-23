@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1784049552699,
+  "lastUpdate": 1792755686434,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -135,6 +135,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.393,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7a4ae1f3fbd237a5910f312c18708e63ceb9773",
+          "message": "Merge pull request #9 from Zanders214/claude/ci-ccache\n\nCI: cache compiles with ccache and drop the duplicate Linux build",
+          "timestamp": "2026-10-23T13:33:48+02:00",
+          "tree_id": "c5f38133e81f0e9dcfb88961b8a47884750a2ab1",
+          "url": "https://github.com/Zanders214/pre-drop/commit/d7a4ae1f3fbd237a5910f312c18708e63ceb9773"
+        },
+        "date": 1792755685625,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 37030.844,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.347,
             "unit": "%"
           }
         ]
