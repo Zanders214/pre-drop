@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792755686434,
+  "lastUpdate": 1792755778953,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -169,6 +169,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.347,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e59a3348333da633ac5ba67478f7e9601360e79",
+          "message": "Merge pull request #8 from Zanders214/claude/riser-audible-earlier\n\nMake the riser noise audible soon after it engages",
+          "timestamp": "2026-10-23T13:41:53+02:00",
+          "tree_id": "8014b5324d85d9095c046e0e6af9d0c63a48eee0",
+          "url": "https://github.com/Zanders214/pre-drop/commit/9e59a3348333da633ac5ba67478f7e9601360e79"
+        },
+        "date": 1792755778341,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 29811.791,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.279,
             "unit": "%"
           }
         ]
