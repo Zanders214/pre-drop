@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792758409310,
+  "lastUpdate": 1792768618360,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -271,6 +271,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.269,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9524a888ef99f37fb1cfdf36219eeca2b50bd676",
+          "message": "Merge pull request #12 from Zanders214/claude/effects-in-sync\n\nEffects: rise together from 0% and sit at the same level",
+          "timestamp": "2026-10-23T17:11:54+02:00",
+          "tree_id": "64ebef7f17135e943f739fbb860a6a5bfb58b22f",
+          "url": "https://github.com/Zanders214/pre-drop/commit/9524a888ef99f37fb1cfdf36219eeca2b50bd676"
+        },
+        "date": 1792768617254,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 41877.532,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.393,
             "unit": "%"
           }
         ]
