@@ -67,7 +67,8 @@ void testMappingBoundaries()
     const auto at1 = PreDropEngine::mapMacro (1.0f);
     check (approx (at1.hpfCutoffHz, 800.0f, 0.5f),  "at amount=1 HPF cutoff reaches 800 Hz (default depth)");
     check (approx (at1.riserLevel, 0.5f, 1.0e-6f), "at amount=1 riser sits at -6 dB re the signal (default depth)");
-    check (at1.delayFeedback <= 0.95f,             "delay feedback stays clamped <= 0.95 for stability");
+    check (approx (at1.delayFeedback, PreDropEngine::maxDelayFeedback, 1.0e-6f) && at1.delayFeedback <= 0.6f,
+           "delay feedback tops out at 0.6, bounding in-phase echo build-up");
 
     // Riser level is linear in Amount, so half the knob is half the level.
     check (approx (PreDropEngine::mapMacro (0.5f).riserLevel, 0.5f * at1.riserLevel, 1.0e-6f),
@@ -227,9 +228,11 @@ struct PinkNoise
     }
 };
 
-// Renders 6 s of the same seeded pink noise through an engine and returns the
-// output's channel 0. HPF depth 0 keeps the high-pass out of the measurement.
-std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths)
+// Renders 6 s of the same seeded pink noise (or, for the worst case, a 400 Hz
+// tone: exactly 150 cycles per 375 ms echo, so every echo lands in phase)
+// through an engine and returns the output's channel 0. HPF depth 0 keeps the
+// high-pass out of the measurement.
+std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool alignedTone = false)
 {
     constexpr double sr = 48000.0;
     constexpr int block = 512;
@@ -252,7 +255,9 @@ std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths)
     {
         for (int n = 0; n < block; ++n)
         {
-            const float x = noise.next();
+            const auto i = (double) (b * block + n);
+            const float x = alignedTone ? 0.1f * (float) std::sin (juce::MathConstants<double>::twoPi * 400.0 * i / sr)
+                                        : noise.next();
             buffer.setSample (0, n, x);
             buffer.setSample (1, n, x);
         }
@@ -265,15 +270,15 @@ std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths)
 
 // One effect's wet level relative to the signal, in dB, over the settled last
 // 2 s: the same render with that effect switched off is subtracted out.
-float wetLevelDb (float PreDropEngine::Depths::* effect, float amount, float depth)
+float wetLevelDb (float PreDropEngine::Depths::* effect, float amount, float depth, bool alignedTone = false)
 {
     PreDropEngine::Depths off;
     off.reverb = off.delay = off.riser = 0.0f;
     PreDropEngine::Depths on = off;
     on.*effect = depth;
 
-    const auto dry = renderNoise (amount, off);
-    const auto wet = renderNoise (amount, on);
+    const auto dry = renderNoise (amount, off, alignedTone);
+    const auto wet = renderNoise (amount, on, alignedTone);
 
     double signal = 0.0, effectOnly = 0.0;
     for (size_t i = dry.size() / 3 * 2; i < dry.size(); ++i)
@@ -312,6 +317,18 @@ void testEffectsInSync()
         }
         check (hi - lo < 2.0f, "the three effects are within 2 dB of each other");
     }
+
+    // Worst case for the delay: echoes that line up with the input add in
+    // phase, 1 / (1 - fb) instead of the energy sum. With feedback capped at
+    // 0.6 that is +6 dB over the balanced level, never more.
+    const float alignedDefault = wetLevelDb (&D::delay, 1.0f, 0.5f, true);
+    const float alignedMax     = wetLevelDb (&D::delay, 1.0f, 1.0f, true);
+    check (alignedDefault < 0.5f,
+           "in-phase echoes at the default depth stay at or below the signal level (measured "
+             + std::to_string (alignedDefault).substr (0, 5) + " dB)");
+    check (alignedMax < 6.5f,
+           "in-phase echoes at depth 100% stay within +6 dB of the signal (measured "
+             + std::to_string (alignedMax).substr (0, 5) + " dB)");
 }
 
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------

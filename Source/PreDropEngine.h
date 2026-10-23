@@ -46,7 +46,7 @@ public:
         float reverbWet     = 0.0f;    // juce::dsp::Reverb wetLevel (wet-only send)
         float reverbSize    = 0.3f;    // 0..1 room size
         float delayWet      = 0.0f;    // echo gain
-        float delayFeedback = 0.0f;    // 0..1 feedback (clamped < 1 for stability)
+        float delayFeedback = 0.0f;    // 0..maxDelayFeedback, well below 1 for stability
         float riserLevel    = 0.0f;    // riser RMS as a fraction of the signal's RMS
         float riserCutoffHz = 200.0f;  // band-pass centre of the riser
     };
@@ -67,6 +67,9 @@ public:
     /** Wet level of reverb, delay and riser relative to the signal, at full
         Amount and the default depth of 0.5 (-6 dB). */
     static constexpr float nominalWetRatio = 0.5f;
+
+    /** Delay feedback at full Amount; see mapMacro for why it stops here. */
+    static constexpr float maxDelayFeedback = 0.6f;
 
     /** Gain an effect's depth applies to its nominal level: 0 -> off,
         0.5 -> 1x (balanced), 1 -> 2x. */
@@ -118,7 +121,12 @@ public:
         // 3. Delay: feedback grows with Amount, and the echo gain is scaled by
         //    sqrt(1 - fb^2) because a feedback loop's steady-state energy is
         //    1 / (1 - fb^2) times one echo; this holds the delay level in step.
-        t.delayFeedback = std::min (0.85f * p, 0.95f);
+        //    That energy sum is exact for material whose echoes don't line up.
+        //    Echoes that do (a tone or loop whose period divides the delay time)
+        //    add in phase to 1 / (1 - fb), sqrt((1 + fb) / (1 - fb)) times more.
+        //    Capping feedback at 0.6 bounds that to 2x (+6 dB, ~5 s tail) rather
+        //    than 3.5x (+11 dB) at 0.85.
+        t.delayFeedback = maxDelayFeedback * p;
         t.delayWet      = nominalWetRatio * depthGain (depth.delay) * p
                         * std::sqrt (1.0f - t.delayFeedback * t.delayFeedback);
 
