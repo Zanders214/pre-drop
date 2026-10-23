@@ -3,7 +3,9 @@ name: Build
 on:
   push:
     branches: [dev, main]
+    paths-ignore: ['**.md']   # docs-only changes can't affect the build
   pull_request:
+    paths-ignore: ['**.md']   # docs-only changes can't affect the build
   workflow_dispatch:
 
 concurrency:
@@ -44,6 +46,19 @@ jobs:
             libglu1-mesa-dev \
             libcurl4-openssl-dev
 
+      # Compiler cache: JUCE's modules are most of every compile and almost never
+      # change. Only push builds save, so PRs read the warm dev/main cache
+      # without crowding it out of the 10 GB repo cache quota. Skipped on Windows,
+      # where the Visual Studio generator (kept to match release.yml) ignores
+      # compiler launchers.
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: build-${{ matrix.os }}
+          max-size: 500M
+          save: ${{ github.event_name != 'pull_request' }}
+
       - name: Cache JUCE (FetchContent)
         uses: actions/cache@v4
         with:
@@ -54,6 +69,7 @@ jobs:
         run: >
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           ${{ runner.os == 'macOS' && '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"' || '' }}
+          ${{ runner.os != 'Windows' && '-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' || '' }}
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -61,8 +77,18 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
-      # Linux pluginval lives in quality.yml (in-process, strictness 5) to avoid a
-      # duplicate run; macOS / Windows validation stay here for cross-platform cover.
+      # Every OS validates the VST3 it just built, so no job rebuilds the plugin
+      # only to validate it. Linux runs in-process under xvfb with a pinned
+      # pluginval and a long timeout (the shared runners are slow).
+      - name: Validate VST3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Linux.zip
+          unzip -o pluginval.zip && chmod +x pluginval
+          VST3=$(find build -name '*.vst3' -path '*_artefacts*' | head -1)
+          echo "Validating $VST3"
+          xvfb-run -a ./pluginval --strictness-level 5 --validate-in-process --timeout-ms 300000 "$VST3"
+
       - name: Download pluginval (macOS)
         if: runner.os == 'macOS'
         run: |

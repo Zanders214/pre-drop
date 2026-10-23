@@ -3,8 +3,10 @@ name: Performance Benchmark
 on:
   push:
     branches: [dev, main]
+    paths-ignore: ['**.md']   # docs-only changes can't affect the build
   pull_request:
     branches: [dev, main]
+    paths-ignore: ['**.md']   # docs-only changes can't affect the build
   workflow_dispatch:
 
 permissions:
@@ -31,6 +33,16 @@ jobs:
 
       - uses: lukka/get-cmake@latest
 
+      # Compiler cache: JUCE's modules are most of every compile and almost never
+      # change. Only push builds save, so PRs read the warm dev/main cache
+      # without crowding it out of the 10 GB repo cache quota.
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: bench
+          max-size: 500M
+          save: ${{ github.event_name != 'pull_request' }}
+
       - name: Cache JUCE (FetchContent)
         uses: actions/cache@v4
         with:
@@ -41,7 +53,9 @@ jobs:
           key: juce-ninja-${{ runner.os }}-8.0.4
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPREDROP_BUILD_BENCH=ON
+        run: >
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPREDROP_BUILD_BENCH=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build perf_bench
         run: cmake --build build --target perf_bench --parallel
