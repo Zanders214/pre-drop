@@ -251,6 +251,11 @@ void testStateRoundTrip()
     PreDropAudioProcessor untouched;
     untouched.setStateInformation (foreign.getData(), (int) foreign.getSize());
     check (approx (param (untouched, "amount"), 0.0f, 1.0e-6f), "a foreign state is ignored");
+
+    // Bytes that are not a saved state at all must be ignored too.
+    const char junk[] = "not a plugin state";
+    untouched.setStateInformation (junk, (int) sizeof (junk));
+    check (approx (param (untouched, "amount"), 0.0f, 1.0e-6f), "malformed state data is ignored");
 }
 
 // ---- Editor -----------------------------------------------------------------
@@ -371,6 +376,27 @@ void testBuildUpCurveDrag()
     curve->mouseUp (mouseAt (*curve, { w * 2.0f, y }, true));
 }
 
+void testUnboundIndicators()
+{
+    std::printf ("Indicators without a data source:\n");
+
+    // Chips with no Amount / HPF-depth source fall back to idle / full depth.
+    EffectChips chips;
+    chips.setSize (308, 40);
+    check (hasDetail (render (chips)), "chips render with no data source");
+
+    // A curve pointed at a missing parameter draws idle and ignores the mouse.
+    PreDropAudioProcessor p;
+    BuildUpCurve curve (p.getState(), "noSuchParameter");
+    curve.setSize (308, 126);
+    check (hasDetail (render (curve)), "curve renders without a parameter");
+
+    curve.mouseDown (mouseAt (curve, { 200.0f, 60.0f }, false));
+    curve.mouseDrag (mouseAt (curve, { 250.0f, 60.0f }, true));
+    curve.mouseUp   (mouseAt (curve, { 250.0f, 60.0f }, true));
+    check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "a curve without a parameter changes nothing");
+}
+
 void testButtonStates()
 {
     std::printf ("EFFECTS button states:\n");
@@ -411,6 +437,7 @@ int main()
     testStateRoundTrip();
     testEditor();
     testBuildUpCurveDrag();
+    testUnboundIndicators();
     testButtonStates();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
