@@ -121,15 +121,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         ParameterID { ParamID::scope, 1 }, "Applies To", StringArray { "All tracks", "Selected tracks" }, 0,
         AudioParameterChoiceAttributes().withAutomatable (false)));
 
-    // Which effects this instance applies while it is a linked TRACK.
-    const auto addTrackSwitch = [&] (const char* id, const char* name)
+    // How much of each effect this instance gets while it is a linked TRACK:
+    // a share of the main's depth for that effect (100% = all of it, 0% = off).
+    const auto addTrackLevel = [&] (const char* id, const char* name)
     {
-        layout.add (std::make_unique<AudioParameterBool> (ParameterID { id, 1 }, name, true));
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { id, 1 }, name,
+            NormalisableRange<float> (0.0f, 1.0f), 1.0f,
+            AudioParameterFloatAttributes().withStringFromValueFunction (percentFromValue)));
     };
 
-    addTrackSwitch (ParamID::trackHpf,    "Track High-Pass");
-    addTrackSwitch (ParamID::trackReverb, "Track Reverb");
-    addTrackSwitch (ParamID::trackDelay,  "Track Delay");
+    addTrackLevel (ParamID::trackHpf,    "Track High-Pass");
+    addTrackLevel (ParamID::trackReverb, "Track Reverb");
+    addTrackLevel (ParamID::trackDelay,  "Track Delay");
 
     return layout;
 }
@@ -178,15 +182,15 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     if (getRole() == Role::track)
     {
-        // A linked track follows the main's Amount and depths for the effects
-        // switched on for it. The riser plays once, on the main. With no main,
-        // or the main applying to the whole mix, everything ramps to zero so
-        // the track passes its audio through.
+        // A linked track follows the main's Amount, and gets its own share of
+        // the main's depth for each effect. The riser plays once, on the main.
+        // With no main, or the main applying to the whole mix, everything ramps
+        // to zero so the track passes its audio through.
         const auto& main  = linkHub->mainState();
         const bool active = linkHub->tracksActive();
         const auto depth  = [&] (LinkHub::Effect e)
         {
-            return active && param (trackEffect (e)) > 0.5f ? main.depths[(size_t) e].load() : 0.0f;
+            return active ? main.depths[(size_t) e].load() * param (trackEffect (e)) : 0.0f;
         };
 
         engine.setAmount      (active ? main.amount.load() : 0.0f);
@@ -444,16 +448,16 @@ void PreDropAudioProcessor::setTrackName (const juce::String& name)
     apvts.state.setProperty (trackNameTag, name.trim(), nullptr);
 }
 
-bool PreDropAudioProcessor::isLinkEffectOn (LinkHub::Effect effect) const
+float PreDropAudioProcessor::getLinkLevel (LinkHub::Effect effect) const
 {
-    return apvts.getRawParameterValue (trackEffect (effect))->load() > 0.5f;
+    return apvts.getRawParameterValue (trackEffect (effect))->load();
 }
 
-void PreDropAudioProcessor::setLinkEffectOn (LinkHub::Effect effect, bool shouldBeOn)
+void PreDropAudioProcessor::setLinkLevel (LinkHub::Effect effect, float level)
 {
     auto* p = apvts.getParameter (trackEffect (effect));
     p->beginChangeGesture();
-    p->setValueNotifyingHost (shouldBeOn ? 1.0f : 0.0f);
+    p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, level));
     p->endChangeGesture();
 }
 

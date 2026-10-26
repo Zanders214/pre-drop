@@ -18,7 +18,7 @@
         publishes its Amount and effect depths, and whether it applies to
         selected tracks only.
       - *Tracks* (instances set to TRACK) register so the main's editor can list
-        them and switch their effects on and off.
+        them and set how much of each effect they get.
 
     Threading: the published values are atomics, so audio threads read them
     without locking. The track list is only touched on the message thread (and
@@ -28,17 +28,19 @@
 class LinkHub
 {
 public:
-    /** The effects a linked track can switch on and off. */
+    /** The effects a linked track applies, each at its own level. */
     enum class Effect { hpf = 0, reverb = 1, delay = 2 };
     static constexpr int numEffects = 3;
 
-    /** Implemented by a processor while it is set to TRACK. Message thread. */
+    /** Implemented by a processor while it is set to TRACK. Message thread.
+        A level is 0..1: how much of the main's depth for that effect the track
+        gets (1, the default, is all of it; 0 is off). */
     struct LinkedTrack
     {
         virtual ~LinkedTrack() = default;
         virtual juce::String getLinkName() const = 0;
-        virtual bool isLinkEffectOn (Effect effect) const = 0;
-        virtual void setLinkEffectOn (Effect effect, bool shouldBeOn) = 0;
+        virtual float getLinkLevel (Effect effect) const = 0;
+        virtual void  setLinkLevel (Effect effect, float level) = 0;
     };
 
     /** What the main publishes for its tracks; written by the main, read by any

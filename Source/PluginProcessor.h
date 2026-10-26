@@ -20,7 +20,8 @@
     The main's "applies to" switch picks ALL TRACKS (it processes the whole mix,
     as a single PreDrop always has) or SELECTED TRACKS (it only adds the riser,
     and every linked track applies the effects switched on for it, following
-    the main's Amount and depths). See LinkHub.
+    the main's Amount and depths, scaled by its own level per effect). See
+    LinkHub.
 */
 class PreDropAudioProcessor : public juce::AudioProcessor,
                               public LinkHub::LinkedTrack,
@@ -99,8 +100,8 @@ public:
     void setTrackName (const juce::String& name);   // empty: back to the host's name
 
     juce::String getLinkName() const override { return getTrackName(); }
-    bool isLinkEffectOn (LinkHub::Effect effect) const override;
-    void setLinkEffectOn (LinkHub::Effect effect, bool shouldBeOn) override;
+    float getLinkLevel (LinkHub::Effect effect) const override;
+    void  setLinkLevel (LinkHub::Effect effect, float level) override;
 
     void updateTrackProperties (const TrackProperties& properties) override;
 

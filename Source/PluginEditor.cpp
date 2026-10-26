@@ -39,7 +39,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     : AudioProcessorEditor (&p),
       processorRef (p),
       buildUpCurve (p.getState(), "amount"),
-      link (p, lnf)
+      link (p)
 {
     // --- Amount knob ---------------------------------------------------------
     amountSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -242,16 +242,16 @@ float PreDropAudioProcessorEditor::displayedDepth (const char* depthId) const
     if (! isTrackMode())
         return paramValue (processorRef, depthId);
 
-    // A track applies the main's depth for each effect switched on for it, and
-    // never the riser (that plays once, on the main).
+    // A track gets its own share of the main's depth for each effect, and never
+    // the riser (that plays once, on the main).
     const juce::String id (depthId);
     const auto effect = id == "hpfDepth"    ? LinkHub::Effect::hpf
                       : id == "reverbDepth" ? LinkHub::Effect::reverb
                       : LinkHub::Effect::delay;
     const auto& hub = processorRef.getLinkHub();
-    if (id == "riserDepth" || ! hub.tracksActive() || ! processorRef.isLinkEffectOn (effect))
+    if (id == "riserDepth" || ! hub.tracksActive())
         return 0.0f;
-    return hub.mainState().depths[(size_t) effect].load();
+    return hub.mainState().depths[(size_t) effect].load() * processorRef.getLinkLevel (effect);
 }
 
 void PreDropAudioProcessorEditor::updateRiserButton()

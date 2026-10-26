@@ -123,7 +123,7 @@ private:
     // a TRACK shows instead.
     struct LinkControls
     {
-        LinkControls (PreDropAudioProcessor& p, juce::LookAndFeel& pills) : matrix (p), panel (p, pills) {}
+        explicit LinkControls (PreDropAudioProcessor& p) : matrix (p), panel (p) {}
 
         juce::TextButton roleButton;
         juce::TextButton tracksButton;

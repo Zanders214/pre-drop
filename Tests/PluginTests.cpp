@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -163,13 +164,22 @@ bool pumpUntil (Condition done)
     return done();
 }
 
-juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, bool dragged)
+// A mouse event at `pos`; for a drag, `downPos` is where the button went down.
+juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, bool dragged,
+                          std::optional<juce::Point<float>> downPos = std::nullopt, int clicks = 1)
 {
     const auto now = juce::Time::getCurrentTime();
     return { juce::Desktop::getInstance().getMainMouseSource(), pos, {},
              juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
              juce::MouseInputSource::defaultRotation, juce::MouseInputSource::defaultTiltX,
-             juce::MouseInputSource::defaultTiltY, &c, &c, now, pos, now, 1, dragged };
+             juce::MouseInputSource::defaultTiltY, &c, &c, now, downPos.value_or (pos), now, clicks, dragged };
+}
+
+// Clicks (down + up, no drag) at `pos`.
+void click (juce::Component& c, juce::Point<float> pos)
+{
+    c.mouseDown (mouseAt (c, pos, false));
+    c.mouseUp (mouseAt (c, pos, false));
 }
 
 // ---- Processor --------------------------------------------------------------
@@ -572,7 +582,7 @@ void testLinkedProcessing()
     check (guitar.getTrackName() == "Guitar", "a name typed into PreDrop wins over the host's");
 
     for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
-        drums.setLinkEffectOn (e, false);
+        drums.setLinkLevel (e, 0.0f);
 
     for (auto* p : { &master, &guitar, &drums })
         p->prepareToPlay (48000.0, 512);
@@ -591,8 +601,27 @@ void testLinkedProcessing()
     check (settledChange (guitar, 512, 40) > 0.05f, "a track with its effects on follows the main's Amount");
     check (settledChange (drums, 512, 40) == 0.0f, "a track with every effect off is untouched");
 
-    drums.setLinkEffectOn (Effect::reverb, true);
-    check (settledChange (drums, 512, 40) > 0.01f, "switching one effect on for a track applies it");
+    drums.setLinkLevel (Effect::reverb, 1.0f);
+    check (settledChange (drums, 512, 40) > 0.01f, "raising one effect's level for a track applies it");
+
+    // A track's level is its share of the main's depth: two tracks fed the same
+    // signal, reverb only, one at 100% and one at 50%, differ by exactly half.
+    {
+        PreDropAudioProcessor full, half;
+        for (auto* p : { &full, &half })
+        {
+            p->setRole (Role::track);
+            p->setLinkLevel (Effect::hpf, 0.0f);
+            p->setLinkLevel (Effect::delay, 0.0f);
+            p->prepareToPlay (48000.0, 512);
+        }
+        half.setLinkLevel (Effect::reverb, 0.5f);
+        const float fullReverb = settledChange (full, 512, 60);
+        const float halfReverb = settledChange (half, 512, 60);
+        check (fullReverb > 0.01f && approx (halfReverb / fullReverb, 0.5f, 0.02f),
+               "a track at 50% gets half the reverb of one at 100% (ratio "
+                 + std::to_string (halfReverb / fullReverb).substr (0, 5) + ")");
+    }
 
     setParam (master, "amount", 0.0f);
     settledChange (guitar, 512, 10);                         // let the ramps settle
@@ -603,9 +632,9 @@ void testLinkedProcessing()
     drums.getStateInformation (state);
     PreDropAudioProcessor reloaded;
     reloaded.setStateInformation (state.getData(), (int) state.getSize());
-    check (reloaded.getRole() == Role::track && reloaded.isLinkEffectOn (Effect::reverb)
-             && ! reloaded.isLinkEffectOn (Effect::delay) && master.getLinkHub().getTracks().size() == 3,
-           "a reloaded TRACK relinks with its switches");
+    check (reloaded.getRole() == Role::track && approx (reloaded.getLinkLevel (Effect::reverb), 1.0f, 1.0e-6f)
+             && approx (reloaded.getLinkLevel (Effect::delay), 0.0f, 1.0e-6f) && master.getLinkHub().getTracks().size() == 3,
+           "a reloaded TRACK relinks with its levels");
 
     // A second MAIN works on its own until the first one steps down.
     PreDropAudioProcessor second;
@@ -652,14 +681,35 @@ void testLinkingEditors()
     matrix->refresh();
     check (pixelsChanged (allTracksView, render (*matrix)) > 500, "the panel then lists the linked tracks");
 
-    matrix->mouseDown (mouseAt (*matrix, matrix->cell (1, Effect::reverb).getCentre(), false));
-    check (! guitar.isLinkEffectOn (Effect::reverb) && keys.isLinkEffectOn (Effect::reverb),
-           "clicking a track's REV switch turns reverb off for that track only");
+    click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
+    check (guitar.getLinkLevel (Effect::reverb) == 0.0f && keys.getLinkLevel (Effect::reverb) == 1.0f,
+           "clicking a track's REV level turns reverb off for that track only");
+    click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
+    check (guitar.getLinkLevel (Effect::reverb) == 1.0f, "clicking it again brings it back to 100%");
 
-    matrix->mouseDown (mouseAt (*matrix, matrix->cell (0, Effect::delay).getCentre(), false));
-    check (! guitar.isLinkEffectOn (Effect::delay) && ! keys.isLinkEffectOn (Effect::delay), "ALL switches a column off for every track");
-    matrix->mouseDown (mouseAt (*matrix, matrix->cell (0, Effect::delay).getCentre(), false));
-    check (guitar.isLinkEffectOn (Effect::delay) && keys.isLinkEffectOn (Effect::delay), "and back on again");
+    // Dragging a cell down by 30 px (half the 60 px travel) sets it to 50%.
+    const auto delayCell = matrix->cell (1, Effect::delay).getCentre();
+    matrix->mouseDown (mouseAt (*matrix, delayCell, false));
+    matrix->mouseDrag (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
+    matrix->mouseUp (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
+    check (approx (guitar.getLinkLevel (Effect::delay), 0.5f, 0.02f) && keys.getLinkLevel (Effect::delay) == 1.0f,
+           "dragging a track's DLY level sets it (to "
+             + std::to_string (guitar.getLinkLevel (Effect::delay)).substr (0, 4) + ")");
+    matrix->mouseDoubleClick (mouseAt (*matrix, delayCell, false, std::nullopt, 2));
+    check (guitar.getLinkLevel (Effect::delay) == 1.0f, "double-clicking a level resets it to 100%");
+
+    click (*matrix, matrix->cell (0, Effect::delay).getCentre());
+    check (guitar.getLinkLevel (Effect::delay) == 0.0f && keys.getLinkLevel (Effect::delay) == 0.0f,
+           "clicking ALL turns a column off for every track");
+    click (*matrix, matrix->cell (0, Effect::delay).getCentre());
+    check (guitar.getLinkLevel (Effect::delay) == 1.0f && keys.getLinkLevel (Effect::delay) == 1.0f, "and back to 100%");
+
+    const auto allHpf = matrix->cell (0, Effect::hpf).getCentre();
+    matrix->mouseDown (mouseAt (*matrix, allHpf, false));
+    matrix->mouseDrag (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
+    matrix->mouseUp (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
+    check (approx (guitar.getLinkLevel (Effect::hpf), 0.25f, 0.02f) && approx (keys.getLinkLevel (Effect::hpf), 0.25f, 0.02f),
+           "dragging ALL sets a column for every track");
     matrix->refresh();
     check (hasDetail (render (*mainEditor)), "the main renders with the tracks list");
 
@@ -699,10 +749,11 @@ void testLinkingEditors()
     panel->nameLabel().setText ("Lead Guitar", juce::sendNotificationSync);
     check (guitar.getTrackName() == "Lead Guitar", "renaming in the panel renames the track in the main's list");
 
-    for (auto* b : findChildren<juce::TextButton> (*panel))
-        if (b->getButtonText() == "HIGH-PASS")
-            b->triggerClick();
-    check (pumpUntil ([&] { return ! guitar.isLinkEffectOn (Effect::hpf); }), "a TRACK's own HIGH-PASS switch turns it off");
+    panel->levelKnob (Effect::reverb).setValue (0.3, juce::sendNotificationSync);
+    check (approx (guitar.getLinkLevel (Effect::reverb), 0.3f, 1.0e-3f), "a TRACK's own REVERB knob sets its level");
+    setParam (guitar, "trackDelay", 0.6f);
+    check (pumpUntil ([&] { return std::abs (panel->levelKnob (Effect::delay).getValue() - 0.6) < 1.0e-3; }),
+           "a level changed from the main moves the TRACK's knob");
     check (hasDetail (render (*trackEditor)), "a TRACK renders its face");
 
     // Switching the main's role from its pill swaps its face over.
