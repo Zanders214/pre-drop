@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793038592895,
+  "lastUpdate": 1793042800670,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -334,6 +334,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "processBlock",
             "value": 36787.222,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.345,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0d03797f4d6a07f94b69931b874d4ff0094642f",
+          "message": "Merge pull request #14 from Zanders214/claude/track-linking\n\nLink tracks and returns to a main PreDrop, with per-track effect levels",
+          "timestamp": "2026-10-26T20:18:32+01:00",
+          "tree_id": "bf2e0dbc3caf89b2c7fedb236f7b774db67889f2",
+          "url": "https://github.com/Zanders214/pre-drop/commit/f0d03797f4d6a07f94b69931b874d4ff0094642f"
+        },
+        "date": 1793042799403,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 36762.24,
             "unit": "ns/block"
           },
           {
