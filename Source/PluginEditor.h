@@ -55,8 +55,9 @@ private:
     enum class Reveal { curve, effects, tracks };
     void setReveal (Reveal newReveal);
 
-    // Linking.
+    // Linking. "Track mode" covers TRACK and RETURN: both follow the main.
     bool isTrackMode() const noexcept;
+    bool isReturnMode() const noexcept;
     void applyRole();
     float displayedAmount() const;                 // the main's, as a TRACK
     float displayedDepth (const char* depthId) const;
@@ -129,7 +130,7 @@ private:
         juce::TextButton tracksButton;
         TrackMatrix      matrix;
         TrackPanel       panel;
-        bool             shownAsTrack = false;
+        int              shownRole = -1;   // forces the first applyRole
     };
     LinkControls link;
 

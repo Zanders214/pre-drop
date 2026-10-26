@@ -69,6 +69,8 @@ PreDropAudioProcessor::~PreDropAudioProcessor()
         apvts.removeParameterListener (id, this);
     if (link.registered)
         linkHub->removeTrack (this);
+    if (link.registeredReturn)
+        linkHub->removeReturn (this);
     linkHub->releaseMain (this);
 }
 
@@ -114,7 +116,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
     // Linking. Role and scope are set-up choices, not performance controls, so
     // they are kept out of the host's automation lanes.
     layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { ParamID::role, 1 }, "Role", StringArray { "Main", "Track" }, 0,
+        ParameterID { ParamID::role, 1 }, "Role", StringArray { "Main", "Track", "Return" }, 0,
         AudioParameterChoiceAttributes().withAutomatable (false)));
 
     layout.add (std::make_unique<AudioParameterChoice> (
@@ -176,16 +178,20 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
     const auto param = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
 
-    // Mix and output trim are always this instance's own.
-    engine.setMix          (param (ParamID::mix));
+    // A RETURN outputs only the effects of what is sent to it: the dry signal
+    // already reaches the mix through each track, so Mix is fixed at fully wet.
+    const auto role = getRole();
+    engine.setWetOnly      (role == Role::returnTrack);
+    engine.setMix          (role == Role::returnTrack ? 1.0f : param (ParamID::mix));
     engine.setOutputTrimDb (param (ParamID::outputTrim));
 
-    if (getRole() == Role::track)
+    if (role != Role::main)
     {
-        // A linked track follows the main's Amount, and gets its own share of
-        // the main's depth for each effect. The riser plays once, on the main.
-        // With no main, or the main applying to the whole mix, everything ramps
-        // to zero so the track passes its audio through.
+        // A linked TRACK or RETURN follows the main's Amount, and gets its own
+        // share of the main's depth for each effect. The riser plays once, on
+        // the main. With no main, or the main applying to the whole mix,
+        // everything ramps to zero: a track passes its audio through, a return
+        // goes silent.
         const auto& main  = linkHub->mainState();
         const bool active = linkHub->tracksActive();
         const auto depth  = [&] (LinkHub::Effect e)
@@ -363,7 +369,7 @@ void PreDropAudioProcessor::timerCallback()
 
 PreDropAudioProcessor::Role PreDropAudioProcessor::getRole() const noexcept
 {
-    return apvts.getRawParameterValue (ParamID::role)->load() > 0.5f ? Role::track : Role::main;
+    return (Role) juce::jlimit (0, 2, juce::roundToInt (apvts.getRawParameterValue (ParamID::role)->load()));
 }
 
 void PreDropAudioProcessor::setRole (Role newRole)
@@ -392,24 +398,26 @@ void PreDropAudioProcessor::parameterChanged (const juce::String&, float)
 
 void PreDropAudioProcessor::updateLink()
 {
-    if (getRole() == Role::track)
+    const auto role = getRole();
+
+    if (const bool track = role == Role::track; track != link.registered)
     {
-        linkHub->releaseMain (this);
-        if (! link.registered)
-        {
-            linkHub->addTrack (this);
-            link.registered = true;
-        }
+        if (track) linkHub->addTrack (this);
+        else       linkHub->removeTrack (this);
+        link.registered = track;
     }
-    else
+
+    if (const bool ret = role == Role::returnTrack; ret != link.registeredReturn)
     {
-        if (link.registered)
-        {
-            linkHub->removeTrack (this);
-            link.registered = false;
-        }
+        if (ret) linkHub->addReturn (this);
+        else     linkHub->removeReturn (this);
+        link.registeredReturn = ret;
+    }
+
+    if (role == Role::main)
         linkHub->claimMain (this);   // no-op while another instance is the main
-    }
+    else
+        linkHub->releaseMain (this);
 
     publishMainState();
 }

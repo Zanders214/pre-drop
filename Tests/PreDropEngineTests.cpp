@@ -552,6 +552,61 @@ void testHpfIdleTransitionsAreSmooth()
                                         + std::to_string (release / natural).substr (0, 4) + "x the tone's own)");
 }
 
+// ---- Test 3g: wet only (for a return track) drops the dry signal exactly. -----
+void testWetOnly()
+{
+    std::printf ("Wet-only output:\n");
+
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+
+    // Same input through a normal and a wet-only engine; with the high-pass and
+    // riser out of the way the normal output is input + effects, so the two
+    // must differ by exactly the input.
+    const auto run = [&] (bool wetOnly, float amount, float reverb, float delay, float& maxAbs)
+    {
+        PreDropEngine engine;
+        engine.setHpfDepth (0.0f);
+        engine.setRiserDepth (0.0f);
+        engine.setReverbDepth (reverb);
+        engine.setDelayDepth (delay);
+        engine.setWetOnly (wetOnly);
+        engine.setAmount (amount);
+        engine.prepare (sr, 2, block);
+        std::vector<float> out;
+        maxAbs = 0.0f;
+        for (int b = 0; b < 60; ++b)
+        {
+            auto buffer = makeSine (sr, 330.0, block);
+            engine.process (buffer);
+            for (int n = 0; n < block; ++n)
+            {
+                out.push_back (buffer.getSample (0, n));
+                maxAbs = std::max (maxAbs, std::abs (buffer.getSample (0, n)));
+            }
+        }
+        return out;
+    };
+
+    float peak = 0.0f;
+    run (true, 0.0f, 0.5f, 0.5f, peak);
+    check (peak == 0.0f, "at Amount 0 a wet-only engine is silent (no dry leaks through)");
+
+    run (true, 1.0f, 0.0f, 0.0f, peak);
+    check (peak == 0.0f, "with reverb and delay at 0 a wet-only engine stays silent at full Amount");
+
+    float normalPeak = 0.0f, wetPeak = 0.0f;
+    const auto normal = run (false, 1.0f, 0.5f, 0.5f, normalPeak);
+    const auto wet    = run (true,  1.0f, 0.5f, 0.5f, wetPeak);
+    const auto dry = makeSine (sr, 330.0, block);   // every block carries this same input
+    const auto input = [&] (size_t i) { return dry.getSample (0, (int) (i % (size_t) block)); };
+    float worst = 0.0f;
+    for (size_t i = 0; i < normal.size(); ++i)
+        worst = std::max (worst, std::abs ((normal[i] - input (i)) - wet[i]));
+    check (wetPeak > 0.05f && worst < 1.0e-4f, "wet only is exactly the normal output minus the dry signal (largest difference "
+                                                 + std::to_string (worst) + ")");
+}
+
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
 void testEmptyBlocks()
 {
@@ -612,6 +667,7 @@ int main()
     testRiserSample();
     testIdleEffectsPassThrough();
     testHpfIdleTransitionsAreSmooth();
+    testWetOnly();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 

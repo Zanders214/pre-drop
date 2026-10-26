@@ -16,12 +16,12 @@
     and saved inside the plugin state, so a project carries its riser with it,
     and the decoded audio is rebuilt for the engine at the host's sample rate.
 
-    Linking: each instance is either MAIN (normally on the master) or TRACK.
+    Linking: each instance is MAIN (normally on the master), TRACK or RETURN.
     The main's "applies to" switch picks ALL TRACKS (it processes the whole mix,
-    as a single PreDrop always has) or SELECTED TRACKS (it only adds the riser,
-    and every linked track applies the effects switched on for it, following
-    the main's Amount and depths, scaled by its own level per effect). See
-    LinkHub.
+    as a single PreDrop always has) or SELECTED TRACKS (it only adds the riser;
+    every linked TRACK applies the effects at its own level per effect, and
+    every RETURN adds reverb and delay, wet only, to whatever the tracks send
+    it). Tracks and returns follow the main's Amount and depths. See LinkHub.
 */
 class PreDropAudioProcessor : public juce::AudioProcessor,
                               public LinkHub::LinkedTrack,
@@ -83,12 +83,15 @@ public:
     static constexpr double maxRiserSeconds = 60.0;
 
     // --- Linking (message thread unless noted) -------------------------------
-    enum class Role { main = 0, track = 1 };
+    enum class Role { main = 0, track = 1, returnTrack = 2 };
 
     Role getRole() const noexcept;               // any thread
     void setRole (Role newRole);
     bool appliesToSelectedTracks() const noexcept;   // any thread
     void setAppliesToSelectedTracks (bool selectedOnly);
+
+    /** True for TRACK and RETURN: instances that follow the main. */
+    bool followsMain() const noexcept { return getRole() != Role::main; }
 
     /** True while this instance is the main that linked tracks follow. */
     bool isLinkMain() const noexcept { return linkHub->isMain (this); }
@@ -144,7 +147,8 @@ private:
     {
         juce::CriticalSection lock;
         juce::String          hostName;
-        bool                  registered = false;
+        bool                  registered       = false;   // in the hub's track list
+        bool                  registeredReturn = false;   // in the hub's return list
     };
     LinkIdentity link;
 

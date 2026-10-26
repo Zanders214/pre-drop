@@ -256,6 +256,11 @@ public:
     void setRiserDepth  (float d) noexcept { depths.riser  = d; }
     void setHpfDepth    (float d) noexcept { depths.hpf    = d; }
 
+    /** Wet only: output just the effects (echoes, reverb, riser), not the
+        signal they ride on. For a return track, where the dry signal already
+        reaches the mix through each track and must not be doubled. */
+    void setWetOnly (bool shouldBeWetOnly) noexcept { wetOnly = shouldBeWetOnly; }
+
     // The audio-thread hot path. Annotated nonblocking so RealtimeSanitizer
     // verifies it never allocates, locks, or makes a syscall: every primitive it
     // touches (TPT filters, juce::dsp::Reverb, DelayLine, juce::Random) is
@@ -382,7 +387,7 @@ public:
                     const float in      = data[ch][n];
                     const float delayed = delayLine.popSample (ch);
                     delayLine.pushSample (ch, in + delayed * fb);
-                    data[ch][n] = in + delayed * wet;
+                    data[ch][n] = (wetOnly ? 0.0f : in) + delayed * wet;
                 }
             }
         }
@@ -390,6 +395,9 @@ public:
         {
             sm.delayWet.skip (numSamples);
             sm.delayFb.skip (numSamples);
+            if (wetOnly)
+                for (int ch = 0; ch < channels; ++ch)
+                    juce::FloatVectorOperations::clear (data[ch], numSamples);
         }
 
         // Sum the reverb in alongside the signal and echoes.
@@ -522,6 +530,7 @@ private:
     float mix          = 1.0f;
     float outputTrimDb = 0.0f;
     Depths depths;
+    bool  wetOnly = false;
 
     juce::dsp::StateVariableTPTFilter<float> hpf;
     juce::dsp::Reverb                        reverb;

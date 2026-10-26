@@ -113,11 +113,15 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     link.roleButton.setLookAndFeel (&lnf);
     link.roleButton.setPaintingIsUnclipped (true);
     link.roleButton.setTooltip ("MAIN: put this on your master; it holds the Amount knob and the riser.\n"
-                                "TRACK: put this on a track; it follows the main and applies the effects chosen for it.\n"
+                                "TRACK: put this on a track; it follows the main at its own effect levels.\n"
+                                "RETURN: put this on a return track; it adds reverb and delay to what each\n"
+                                "track sends it, and each send knob sets that track's amount.\n"
                                 "Click to switch.");
     link.roleButton.onClick = [this]
     {
-        processorRef.setRole (isTrackMode() ? PreDropAudioProcessor::Role::main : PreDropAudioProcessor::Role::track);
+        using Role = PreDropAudioProcessor::Role;
+        const auto role = processorRef.getRole();
+        processorRef.setRole (role == Role::main ? Role::track : role == Role::track ? Role::returnTrack : Role::main);
         applyRole();
     };
     addAndMakeVisible (link.roleButton);
@@ -195,21 +199,32 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
 
 bool PreDropAudioProcessorEditor::isTrackMode() const noexcept
 {
-    return processorRef.getRole() == PreDropAudioProcessor::Role::track;
+    return processorRef.followsMain();
+}
+
+bool PreDropAudioProcessorEditor::isReturnMode() const noexcept
+{
+    return processorRef.getRole() == PreDropAudioProcessor::Role::returnTrack;
 }
 
 void PreDropAudioProcessorEditor::applyRole()
 {
     const bool track = isTrackMode();
-    link.shownAsTrack = track;
+    const bool ret   = isReturnMode();
+    link.shownRole = (int) processorRef.getRole();
 
-    link.roleButton.setButtonText (track ? "TRACK" : "MAIN");
+    link.roleButton.setButtonText (ret ? "RETURN" : (track ? "TRACK" : "MAIN"));
     link.roleButton.setToggleState (track, juce::dontSendNotification);
 
     riserUi.button.setVisible (! track);
     effectsButton.setVisible (! track);
     link.tracksButton.setVisible (! track);
+    link.panel.setReturnMode (ret);
     link.panel.setVisible (track);
+
+    // A return is always fully wet (its dry is the tracks' own signal).
+    mixSlider.setEnabled (! ret);
+    mixSlider.setAlpha (ret ? 0.35f : 1.0f);
 
     // As a TRACK the knob mirrors the main's Amount instead of editing this
     // instance's own (unused) one.
@@ -379,7 +394,7 @@ void PreDropAudioProcessorEditor::timerCallback()
 {
     updateRiserButton();
 
-    if (isTrackMode() != link.shownAsTrack)
+    if ((int) processorRef.getRole() != link.shownRole)
         applyRole();
     if (link.matrix.isVisible())
         link.matrix.refresh();
@@ -537,7 +552,7 @@ void PreDropAudioProcessorEditor::paintSliderLabels (juce::Graphics& g, float s)
         g.drawText (value, r, juce::Justification::centredRight, false);
     };
 
-    drawRow (layout.mixLabel,  "MIX",    Format::percent (mix));
+    drawRow (layout.mixLabel,  "MIX",    isReturnMode() ? juce::String ("WET ONLY") : Format::percent (mix));
     drawRow (layout.trimLabel, "OUTPUT", juce::String (trim, 1) + " dB");
 }
 

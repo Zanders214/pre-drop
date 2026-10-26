@@ -19,6 +19,9 @@
         selected tracks only.
       - *Tracks* (instances set to TRACK) register so the main's editor can list
         them and set how much of each effect they get.
+      - *Returns* (instances set to RETURN, on a send / return track) register
+        so the main's editor can say they are linked; how much each track gets
+        is that track's send knob in the host.
 
     Threading: the published values are atomics, so audio threads read them
     without locking. The track list is only touched on the message thread (and
@@ -100,6 +103,26 @@ public:
         return tracks;
     }
 
+    // --- Linked returns (message thread) -------------------------------------
+    void addReturn (const void* owner)
+    {
+        const juce::ScopedLock lock (tracksLock);
+        if (std::find (returns.begin(), returns.end(), owner) == returns.end())
+            returns.push_back (owner);
+    }
+
+    void removeReturn (const void* owner)
+    {
+        const juce::ScopedLock lock (tracksLock);
+        returns.erase (std::remove (returns.begin(), returns.end(), owner), returns.end());
+    }
+
+    int numReturns() const
+    {
+        const juce::ScopedLock lock (tracksLock);
+        return (int) returns.size();
+    }
+
     /** Position of a track in the list (0-based), or -1 if it isn't linked. */
     int indexOf (const LinkedTrack* track) const
     {
@@ -114,4 +137,5 @@ private:
 
     juce::CriticalSection tracksLock;
     std::vector<LinkedTrack*> tracks;
+    std::vector<const void*>  returns;
 };

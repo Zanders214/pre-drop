@@ -21,10 +21,15 @@
     tracks' own parameters, edited through LinkHub, so each track saves (and can
     automate) its own. Scrolls with the mouse wheel when the list is long.
 */
-class TrackMatrix : public juce::Component
+class TrackMatrix : public juce::Component,
+                    public juce::SettableTooltipClient
 {
 public:
-    explicit TrackMatrix (PreDropAudioProcessor& p) : processor (p) {}
+    explicit TrackMatrix (PreDropAudioProcessor& p) : processor (p)
+    {
+        setTooltip ("Drag a level up or down, click to switch it off / back to 100%, double-click to reset.\n"
+                    "Scroll for more tracks.");
+    }
 
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
@@ -89,10 +94,14 @@ public:
             return;
         }
 
-        const auto tracks = processor.getLinkHub().getTracks();
+        const auto tracks  = processor.getLinkHub().getTracks();
+        const int  returns = processor.getLinkHub().numReturns();
         if (tracks.empty())
         {
-            message ("No linked tracks yet. Add PreDrop to a track\nand switch it to TRACK in its header.");
+            message (returns > 0
+                       ? juce::String (returns) + (returns == 1 ? " linked return" : " linked returns")
+                           + ": each track's send knob sets its amount.\nSet PreDrop to TRACK on a track for per-track levels."
+                       : juce::String ("No linked tracks yet. Add PreDrop to a track\nand switch it to TRACK (or RETURN on a return track)."));
             return;
         }
 
@@ -100,7 +109,9 @@ public:
         g.setFont (Fonts::sans (9.0f * s, true, 0.12f));
         g.setColour (Palette::textDimmer);
         const auto labelRow = juce::Rectangle (pad(), firstRowY() - 12.0f * s, (float) getWidth() - 2.0f * pad(), 11.0f * s);
-        g.drawText ("TRACK", labelRow, juce::Justification::centredLeft, false);
+        g.drawText (returns > 0 ? "TRACK  + " + juce::String (returns) + (returns == 1 ? " RETURN" : " RETURNS")
+                                : juce::String ("TRACK"),
+                    labelRow, juce::Justification::centredLeft, false);
         for (int e = 0; e < LinkHub::numEffects; ++e)
         {
             const auto c = cell (0, (LinkHub::Effect) e);
@@ -113,7 +124,7 @@ public:
         {
             g.setFont (Fonts::mono (8.5f * s));
             g.drawText (juce::String (first + 1) + "-" + juce::String (juce::jmin ((int) tracks.size(), first + visibleTrackRows()))
-                          + " of " + juce::String ((int) tracks.size()) + "  (scroll)",
+                          + "/" + juce::String ((int) tracks.size()),
                         labelRow.withRight (cell (0, LinkHub::Effect::hpf).getX() - 10.0f * s),
                         juce::Justification::centredRight, false);
         }
@@ -333,7 +344,8 @@ private:
     juce::String describe() const
     {
         juce::String d;
-        d << (processor.isLinkMain() ? "M" : "-") << (processor.appliesToSelectedTracks() ? "S" : "A") << scroll << "|";
+        d << (processor.isLinkMain() ? "M" : "-") << (processor.appliesToSelectedTracks() ? "S" : "A") << scroll
+          << "R" << processor.getLinkHub().numReturns() << "|";
         for (auto* t : processor.getLinkHub().getTracks())
         {
             d << t->getLinkName() << ":";

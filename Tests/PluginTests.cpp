@@ -129,6 +129,25 @@ float settledChange (PreDropAudioProcessor& p, int block, int blocks)
     return (float) std::sqrt (sum / block);
 }
 
+// Runs a sine through the processor and returns the RMS of the final block's
+// output itself (for a return, whose output is only the effects).
+float settledOutputRms (PreDropAudioProcessor& p, int block, int blocks)
+{
+    juce::MidiBuffer midi;
+    juce::AudioBuffer<float> buffer (2, block);
+    for (int b = 0; b < blocks; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < block; ++n)
+                buffer.setSample (ch, n, 0.5f * std::sin (0.05f * (float) (b * block + n)));
+        p.processBlock (buffer, midi);
+    }
+    double sum = 0.0;
+    for (int n = 0; n < block; ++n)
+        sum += (double) buffer.getSample (0, n) * buffer.getSample (0, n);
+    return (float) std::sqrt (sum / block);
+}
+
 // Writes a 16-bit WAV of `seconds` of noise (or silence) to the temp folder.
 juce::File writeWav (const juce::String& name, double sampleRate, double seconds, int channels, bool silent = false)
 {
@@ -764,7 +783,60 @@ void testLinkingEditors()
            "the MAIN / TRACK pill switches the role and the face");
     roleButton->triggerClick();
     pumpMessages (60);
-    check (master.getRole() == Role::main && tracksButton->isVisible(), "and back to MAIN");
+    check (master.getRole() == Role::returnTrack && roleButton->getButtonText() == "RETURN"
+             && findChild<TrackPanel> (*mainEditor)->isVisible() && ! findChild<TrackPanel> (*mainEditor)->nameLabel().isVisible()
+             && ! findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
+           "clicking again makes it a RETURN: the sends panel, and Mix locked to wet");
+    check (hasDetail (render (*mainEditor)), "a RETURN renders its face");
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::main && tracksButton->isVisible() && findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
+           "and once more back to MAIN");
+}
+
+void testReturnRole()
+{
+    std::printf ("RETURN role:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master, fx;
+    fx.setRole (Role::returnTrack);
+    auto& hub = master.getLinkHub();
+    check (fx.followsMain() && hub.numReturns() == 1 && hub.getTracks().empty(),
+           "a RETURN links as a return, not as a row in the track list");
+
+    for (auto* p : { &master, &fx })
+        p->prepareToPlay (48000.0, 512);
+    setParam (master, "amount", 1.0f);
+
+    check (settledOutputRms (fx, 512, 40) == 0.0f, "on ALL TRACKS a return is silent (the main does the effects)");
+
+    master.setAppliesToSelectedTracks (true);
+    check (settledOutputRms (fx, 512, 60) > 0.01f, "on SELECTED TRACKS a return adds reverb and delay to what is sent");
+
+    // Wet only: the send itself never comes out of the return, even with Mix down.
+    setParam (fx, "mix", 0.0f);
+    check (settledChange (fx, 512, 40) > 0.1f, "a return ignores Mix: it stays fully wet");
+    fx.setLinkLevel (Effect::reverb, 0.0f);
+    fx.setLinkLevel (Effect::delay, 0.0f);
+    settledOutputRms (fx, 512, 10);   // let the ramps settle to off
+    check (settledOutputRms (fx, 512, 20) == 0.0f, "with its reverb and delay at 0 a return is silent: no dry leaks through");
+
+    juce::MemoryBlock state;
+    fx.getStateInformation (state);
+    PreDropAudioProcessor reloaded;
+    reloaded.setStateInformation (state.getData(), (int) state.getSize());
+    check (reloaded.getRole() == Role::returnTrack && hub.numReturns() == 2, "a reloaded RETURN relinks");
+
+    fx.setRole (Role::main);
+    check (hub.numReturns() == 1, "switching a RETURN to another role unlinks it");
+
+    // The main's panel says how many returns are linked.
+    TrackMatrix matrix (master);
+    matrix.setBounds (0, 0, 308, 114);
+    matrix.refresh();
+    check (hasDetail (render (matrix)), "with only returns linked the panel explains the sends");
 }
 
 void testEmptyTrackList()
@@ -844,6 +916,7 @@ int main()
     testLinkHub();
     testLinkedProcessing();
     testLinkingEditors();
+    testReturnRole();
     testEmptyTrackList();
     testUnboundIndicators();
     testButtonStates();

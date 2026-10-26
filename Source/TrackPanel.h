@@ -12,12 +12,14 @@
 #include "PreDropTheme.h"
 
 /**
-    TrackPanel: what a PreDrop set to TRACK shows in place of the curve.
+    TrackPanel: what a PreDrop set to TRACK or RETURN shows in place of the curve.
 
     The link status (following the main, or why not), the track's name as it
     appears in the main's list (double-click to rename), and this track's
     HIGH-PASS / REVERB / DELAY levels: its share of the main's depth for each
-    effect, the same levels the main's TRACKS panel edits.
+    effect, the same levels the main's TRACKS panel edits. A RETURN has no row
+    in that list (each track's send knob is its amount), so in return mode the
+    name row explains the sends instead.
 */
 class TrackPanel : public juce::Component
 {
@@ -81,6 +83,17 @@ public:
         }
     }
 
+    void setReturnMode (bool isReturn)
+    {
+        if (returnMode == isReturn)
+            return;
+        returnMode = isReturn;
+        name.setVisible (! isReturn);
+        shownStatus = {};
+        refresh();
+        repaint();
+    }
+
     juce::Label& nameLabel() noexcept { return name; }
     juce::Slider& levelKnob (LinkHub::Effect effect) noexcept { return levels[(size_t) effect]; }
 
@@ -105,7 +118,14 @@ public:
 
         g.setFont (Fonts::sans (9.0f * s, true, 0.12f));
         g.setColour (Palette::textDimmer);
-        g.drawText ("TRACK NAME", nameCaption.toFloat(), juce::Justification::centredLeft, false);
+        g.drawText (returnMode ? "SENDS" : "TRACK NAME", nameCaption.toFloat(), juce::Justification::centredLeft, false);
+        if (returnMode)
+        {
+            g.setFont (Fonts::sans (10.0f * s, false, 0.02f));
+            g.setColour (Palette::textMid);
+            g.drawText ("Each track's send knob sets how much it gets.", name.getBounds().toFloat(),
+                        juce::Justification::centredLeft, true);
+        }
 
         // Each level knob: its effect name beside it, the percentage under that.
         for (size_t i = 0; i < levels.size(); ++i)
@@ -163,6 +183,8 @@ private:
             return { "NOT LINKED", "Add PreDrop to your master as MAIN, set to SELECTED TRACKS." };
         if (! hub.tracksActive())
             return { "WAITING FOR THE MAIN", "The main applies to ALL TRACKS; set it to SELECTED TRACKS." };
+        if (returnMode)
+            return { "LINKED AS A RETURN", "Adds reverb and delay, wet only, to what tracks send here." };
         return { "LINKED TO THE MAIN", "Levels below are this track's share of the main's depths." };
     }
 
@@ -174,7 +196,8 @@ private:
     std::array<juce::Rectangle<int>, 3> levelText;
     juce::Rectangle<int> nameCaption;
     juce::String shownStatus;
-    float uiScale = 1.0f;
+    float uiScale    = 1.0f;
+    bool  returnMode = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TrackPanel)
 };

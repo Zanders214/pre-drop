@@ -43,7 +43,15 @@ Put PreDrop on your **master** (it starts as **MAIN**) and open **TRACKS**:
   drives the whole build-up.
 
 A track's levels are its own parameters, so they save with the set and can be
-automated per track (they're also on the TRACK's own face). Its name in the list is the host's track name, or one you
+automated per track (they're also on the TRACK's own face).
+
+**Without a PreDrop on every track: use a return.** Put PreDrop on a **return track**
+and click its pill until it says **RETURN**. It adds reverb and delay, wet only, to
+whatever the tracks send it, following the main's Amount and depths at the same
+calibrated level; each track's **send knob** in Ableton is its amount. (The high-pass
+can't work this way, since it has to sit on the track itself, and the amounts live
+on the send knobs rather than in PreDrop's list.) TRACKs and RETURNs can be mixed
+freely; the main's TRACKS panel shows how many returns are linked. Its name in the list is the host's track name, or one you
 double-click to type in. With no main, or the main on ALL TRACKS, a TRACK passes its
 audio through untouched. (Linking works because hosts like Ableton Live run every
 plugin instance in one process.)
@@ -55,7 +63,7 @@ plugin instance in one process.)
 | **Amount**  | The macro. Drives the whole build-up from 0% (clean) to 100% (peak). |
 | **Mix**     | Global dry/wet so the build-up can sit under the source.             |
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
-| **MAIN / TRACK** | The header pill: MAIN on your master, TRACK on a track that should follow it (see above). |
+| **MAIN / TRACK / RETURN** | The header pill: MAIN on your master, TRACK on a track that should follow it, RETURN on a return track fed by sends (see above). |
 | **Tracks**  | On the main: ALL TRACKS or SELECTED TRACKS, and per-track HPF / REV / DLY levels. |
 | **Riser**   | The riser sound. Built-in noise by default; click **RISER** (or drop a WAV / AIFF / FLAC anywhere on the plugin) to use your own sample instead, and pick *Use built-in noise* to go back. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
@@ -100,9 +108,9 @@ Source/
   PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
   PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
   RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
-  LinkHub.h                  process-wide link between the MAIN and its TRACK instances
+  LinkHub.h                  process-wide link between the MAIN and its TRACK / RETURN instances
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
-  TrackPanel.h               what a TRACK shows: link status, name, its effect levels
+  TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels
 Tests/
   PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
   PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model
