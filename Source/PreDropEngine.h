@@ -2,8 +2,11 @@
 
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <memory>
 
+#include "RiserSample.h"
 #include "RtSafety.h"
 
 /**
@@ -30,7 +33,9 @@
     Reverb, delay and riser run in parallel off the high-passed signal and are
     each calibrated to the same wet level *relative to that signal*: -6 dB at
     full Amount and depth 0.5, 0 dB at depth 1. The riser follows the signal's
-    level, so the balance holds on quiet and loud material alike. The mapping
+    level, so the balance holds on quiet and loud material alike. The riser is
+    band-passed noise by default; setRiserSample swaps in a looping user sample
+    at the same calibrated level. The mapping
     from the macro to each effect's targets lives in mapMacro(), a pure function
     and therefore the part most worth unit-testing.
 */
@@ -38,6 +43,13 @@ class PreDropEngine
 {
 public:
     PreDropEngine() = default;
+
+    ~PreDropEngine()
+    {
+        // Nothing else is running by now, so the hand-over slots can be freed here.
+        std::unique_ptr<RiserSample> (incomingRiser.exchange (nullptr));
+        collectRetiredRiserSamples();
+    }
 
     /** Per-effect targets derived from the macro, already in engineering units. */
     struct Targets
@@ -164,6 +176,12 @@ public:
         delayLine.prepare (spec);
         delayLine.setDelay ((float) (delayTimeSeconds * sampleRate));
 
+        // Not running concurrently with process(), so a riser sample handed over
+        // since the last block (typically one rebuilt for this sample rate) can
+        // be adopted, and the one it replaces freed, right here.
+        if (auto* next = incomingRiser.exchange (nullptr))
+            activeRiser.reset (next);
+
         dryBuffer   .setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
         reverbBuffer.setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
 
@@ -205,6 +223,25 @@ public:
         riser.lastCutoff   = -1.0f;
         riser.meanSquare   = 0.0f;
         riser.signalRms    = 0.0f;
+        riser.samplePos    = 0;
+    }
+
+    /** Hands the engine a riser sample built for its current sample rate, or
+        RiserSample::none() to go back to the built-in noise. Call from the
+        message thread: process() adopts it at the start of a block without
+        allocating or locking, and returns the replaced one for
+        collectRetiredRiserSamples() to free. */
+    void setRiserSample (std::unique_ptr<RiserSample> sample)
+    {
+        collectRetiredRiserSamples();
+        // A sample handed over earlier but not adopted yet is simply replaced.
+        std::unique_ptr<RiserSample> (incomingRiser.exchange (sample.release()));
+    }
+
+    /** Frees riser samples the audio thread has swapped out. Message thread. */
+    void collectRetiredRiserSamples()
+    {
+        std::unique_ptr<RiserSample> (retiredRiser.exchange (nullptr));
     }
 
     void setAmount       (float newAmount) noexcept { amount       = newAmount; }
@@ -227,6 +264,17 @@ public:
 
         if (numSamples <= 0 || channels <= 0)
             return;
+
+        // Adopt a newly handed-over riser sample. The replaced one goes to the
+        // retired slot for the message thread to free; if that slot is still
+        // occupied, wait a block rather than lose it.
+        if (retiredRiser.load() == nullptr)
+            if (auto* next = incomingRiser.exchange (nullptr))
+            {
+                retiredRiser.store (activeRiser.release());
+                activeRiser.reset (next);
+                riser.samplePos = 0;
+            }
 
         // Keep a clean copy of the input for the final dry/wet mix.
         for (int ch = 0; ch < channels; ++ch)
@@ -308,13 +356,40 @@ public:
             }
         }
 
-        // --- 4. Riser / filtered-noise sweep (summed in parallel) ---------------
+        // --- 4. Riser: user sample or filtered-noise sweep (summed in parallel) --
+        const RiserSample* sample = activeRiser.get();
+        const bool useSample = sample != nullptr && sample->length() > 0;
+
         const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
         float signalRms = riserRmsStart;
         for (int n = 0; n < numSamples; ++n)
         {
             const float level = sm.riserLevel.getNextValue();
             signalRms += rmsStep;
+
+            if (useSample)
+            {
+                if (level <= 0.0f)
+                {
+                    // Fully down (Amount or riser depth at 0): hold at the top,
+                    // so the next build-up starts on the sample's first sample.
+                    riser.samplePos = 0;
+                }
+                else
+                {
+                    // Loop the sample at unit RMS, scaled exactly like the noise.
+                    const float gain = sample->unitGain * level * signalRms;
+                    const int last = sample->audio.getNumChannels() - 1;
+                    for (int ch = 0; ch < channels; ++ch)
+                        data[ch][n] += sample->audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
+
+                    if (++riser.samplePos >= sample->length())
+                        riser.samplePos = 0;
+                }
+
+                sm.riserCutoff.getNextValue();   // keep the sweep in step for a switch back to noise
+                continue;
+            }
 
             // Same coefficient caching as the HPF: skip the per-sample std::tan
             // when the band-pass centre is parked. The gain that brings the
@@ -393,8 +468,9 @@ private:
     // identical coefficient (an std::tan) every sample. -1 forces the first apply.
     float lastHpfCutoff = -1.0f;
 
-    // The noise riser: its band-pass, coefficient cache, unit-RMS gain for the
-    // current centre, and the level follower that ties it to the signal.
+    // The riser: the noise band-pass, its coefficient cache and unit-RMS gain
+    // for the current centre, the level follower that ties it to the signal,
+    // and the playback position in a user sample.
     struct Riser
     {
         juce::dsp::StateVariableTPTFilter<float> filter;
@@ -402,8 +478,15 @@ private:
         float unitGain   = 1.0f;
         float meanSquare = 0.0f;
         float signalRms  = 0.0f;
+        int   samplePos  = 0;
     };
     Riser riser;
+
+    // User riser sample, owned by the audio thread once adopted. New ones arrive
+    // through `incomingRiser`; replaced ones leave through `retiredRiser`.
+    std::unique_ptr<RiserSample> activeRiser;
+    std::atomic<RiserSample*>    incomingRiser { nullptr };
+    std::atomic<RiserSample*>    retiredRiser  { nullptr };
 
     // One ramp per mapped target, so every parameter change glides instead of
     // stepping. Cutoffs ramp multiplicatively (even in pitch), the rest linearly.

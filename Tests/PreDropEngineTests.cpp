@@ -232,7 +232,19 @@ struct PinkNoise
 // tone: exactly 150 cycles per 375 ms echo, so every echo lands in phase)
 // through an engine and returns the output's channel 0. HPF depth 0 keeps the
 // high-pass out of the measurement.
-std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool alignedTone = false)
+// Two seconds of seeded white noise, the stand-in for a user riser sample.
+juce::AudioBuffer<float> noiseSample (int channels, int length, juce::int64 seed)
+{
+    juce::Random random { seed };
+    juce::AudioBuffer<float> buffer (channels, length);
+    for (int ch = 0; ch < channels; ++ch)
+        for (int n = 0; n < length; ++n)
+            buffer.setSample (ch, n, 0.3f * (random.nextFloat() * 2.0f - 1.0f));
+    return buffer;
+}
+
+std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool alignedTone = false,
+                                bool sampleRiser = false)
 {
     constexpr double sr = 48000.0;
     constexpr int block = 512;
@@ -244,6 +256,8 @@ std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool
     engine.setReverbDepth (depths.reverb);
     engine.setDelayDepth (depths.delay);
     engine.setRiserDepth (depths.riser);
+    if (sampleRiser)
+        engine.setRiserSample (RiserSample::create (noiseSample (2, (int) (2.0 * sr), 7), sr, sr, "noise.wav"));
     engine.prepare (sr, 2, block);
 
     PinkNoise noise;
@@ -270,15 +284,16 @@ std::vector<float> renderNoise (float amount, PreDropEngine::Depths depths, bool
 
 // One effect's wet level relative to the signal, in dB, over the settled last
 // 2 s: the same render with that effect switched off is subtracted out.
-float wetLevelDb (float PreDropEngine::Depths::* effect, float amount, float depth, bool alignedTone = false)
+float wetLevelDb (float PreDropEngine::Depths::* effect, float amount, float depth, bool alignedTone = false,
+                  bool sampleRiser = false)
 {
     PreDropEngine::Depths off;
     off.reverb = off.delay = off.riser = 0.0f;
     PreDropEngine::Depths on = off;
     on.*effect = depth;
 
-    const auto dry = renderNoise (amount, off, alignedTone);
-    const auto wet = renderNoise (amount, on, alignedTone);
+    const auto dry = renderNoise (amount, off, alignedTone, sampleRiser);
+    const auto wet = renderNoise (amount, on, alignedTone, sampleRiser);
 
     double signal = 0.0, effectOnly = 0.0;
     for (size_t i = dry.size() / 3 * 2; i < dry.size(); ++i)
@@ -329,6 +344,116 @@ void testEffectsInSync()
     check (alignedMax < 6.5f,
            "in-phase echoes at depth 100% stay within +6 dB of the signal (measured "
              + std::to_string (alignedMax).substr (0, 5) + " dB)");
+}
+
+// ---- Test 3d: a user riser sample is prepared for clean, balanced looping. -----
+void testRiserSample()
+{
+    std::printf ("Riser sample:\n");
+
+    check (RiserSample::create (juce::AudioBuffer<float> (2, 0), 44100.0, 48000.0, "empty") == nullptr,
+           "an empty file is rejected");
+    juce::AudioBuffer<float> silent (2, 44100);
+    silent.clear();
+    check (RiserSample::create (silent, 44100.0, 48000.0, "silent") == nullptr, "a silent file is rejected");
+
+    // 1 s at 44.1 kHz becomes 1 s at 48 kHz, minus the 20 ms loop crossfade.
+    const auto resampled = RiserSample::create (noiseSample (2, 44100, 1), 44100.0, 48000.0, "noise.wav");
+    check (resampled != nullptr && std::abs (resampled->length() - (48000 - 960)) <= 2,
+           "a 44.1 kHz file is resampled to the engine's 48 kHz");
+    check (resampled != nullptr && resampled->name == "noise.wav", "the sample keeps its file name");
+
+    double sum = 0.0;
+    for (int ch = 0; ch < resampled->audio.getNumChannels(); ++ch)
+        for (int n = 0; n < resampled->length(); ++n)
+            sum += std::pow ((double) resampled->audio.getSample (ch, n) * resampled->unitGain, 2.0);
+    const double rmsAtUnitGain = std::sqrt (sum / (2.0 * resampled->length()));
+    check (approx ((float) rmsAtUnitGain, 1.0f, 1.0e-3f), "unitGain brings the sample to unit RMS");
+
+    check (RiserSample::create (noiseSample (1, 48000, 2), 48000.0, 48000.0, "mono")->audio.getNumChannels() == 1
+        && RiserSample::create (noiseSample (4, 48000, 3), 48000.0, 48000.0, "quad")->audio.getNumChannels() == 2,
+           "mono stays mono and surround files keep their first two channels");
+
+    // A tone that doesn't fit a whole number of cycles in the file would click
+    // at the loop point; the crossfade keeps the wrap as smooth as the tone.
+    juce::AudioBuffer<float> tone (1, 48000);
+    for (int n = 0; n < tone.getNumSamples(); ++n)
+        tone.setSample (0, n, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 437.3 * n / 48000.0));
+    const auto looped = RiserSample::create (tone, 48000.0, 48000.0, "tone");
+    const float* y = looped->audio.getReadPointer (0);
+    float maxStep = 0.0f;
+    for (int n = 1; n < looped->length(); ++n)
+        maxStep = std::max (maxStep, std::abs (y[n] - y[n - 1]));
+    const float wrapStep = std::abs (y[0] - y[looped->length() - 1]);
+    check (wrapStep <= maxStep * 1.5f, "the loop point is click-free (wrap step "
+                                         + std::to_string (wrapStep).substr (0, 5) + " vs largest step "
+                                         + std::to_string (maxStep).substr (0, 5) + ")");
+
+    // In the engine the sample sits at the same calibrated level as the noise.
+    const float db = wetLevelDb (&PreDropEngine::Depths::riser, 1.0f, 0.5f, false, true);
+    check (approx (db, -6.02f, 1.5f), "a sample riser sits at -6 dB re the signal like the noise (measured "
+                                        + std::to_string (db).substr (0, 5) + ")");
+
+    // A build-up starts the sample from its very first sample, however long
+    // the riser sat silent before. The sample is +1 for exactly one block after
+    // its loop crossfade and -1 after that, so the first active block's riser
+    // output is positive only if playback starts at the top (starting a block
+    // late, as a position that kept running while silent would, reads -1).
+    {
+        constexpr double sr = 48000.0;
+        constexpr int block = 2048;
+        const int fade = (int) (0.02 * sr);
+        juce::AudioBuffer<float> steps (1, 48000);
+        for (int n = 0; n < steps.getNumSamples(); ++n)
+            steps.setSample (0, n, n < block + fade ? 1.0f : -1.0f);
+
+        const auto riserOutput = [&] (float riserDepth)
+        {
+            PreDropEngine engine;
+            engine.setHpfDepth (0.0f);
+            engine.setReverbDepth (0.0f);
+            engine.setDelayDepth (0.0f);
+            engine.setRiserDepth (riserDepth);
+            engine.setRiserSample (RiserSample::create (steps, sr, sr, "steps"));
+            engine.prepare (sr, 1, block);
+
+            std::vector<float> firstActive;
+            for (int b = 0; b < 6; ++b)
+            {
+                engine.setAmount (b < 5 ? 0.0f : 1.0f);   // five silent blocks, then build
+                auto buffer = makeSine (sr, 220.0, block, 1);
+                engine.process (buffer);
+                if (b == 5)
+                    firstActive.assign (buffer.getReadPointer (0), buffer.getReadPointer (0) + block);
+            }
+            return firstActive;
+        };
+
+        const auto withRiser = riserOutput (0.5f);
+        const auto without   = riserOutput (0.0f);
+        double riserSum = 0.0;
+        for (size_t i = 0; i < withRiser.size(); ++i)
+            riserSum += withRiser[i] - without[i];
+        check (riserSum > 0.0, "a build-up starts the sample from the top after silence");
+    }
+
+    // Swapping samples in and out while running stays finite, and the
+    // swapped-out sample is handed back for the message thread to free.
+    PreDropEngine engine;
+    engine.setAmount (1.0f);
+    engine.prepare (48000.0, 2, 512);
+    bool finite = true;
+    for (int b = 0; b < 60; ++b)
+    {
+        if (b == 10) engine.setRiserSample (RiserSample::create (noiseSample (2, 24000, 4), 48000.0, 48000.0, "a"));
+        if (b == 30) engine.setRiserSample (RiserSample::none());
+        if (b == 31) engine.collectRetiredRiserSamples();
+        auto buffer = makeSine (48000.0, 220.0, 512);
+        engine.process (buffer);
+        for (int n = 0; n < 512; ++n)
+            finite = finite && std::isfinite (buffer.getSample (0, n));
+    }
+    check (finite, "swapping riser samples while running keeps the output finite");
 }
 
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
@@ -388,6 +513,7 @@ int main()
     testNearPassthroughAtZero();
     testStabilityAtFull();
     testEffectsInSync();
+    testRiserSample();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 
