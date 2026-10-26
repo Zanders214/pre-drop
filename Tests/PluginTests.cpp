@@ -152,6 +152,17 @@ void pumpMessages (int milliseconds)
     juce::MessageManager::getInstance()->runDispatchLoopUntil (milliseconds);
 }
 
+// Pumps the message loop until `done` holds or ~2 s pass; true if it held.
+// For changes the editor only picks up on its 30 Hz timer, which a busy CI
+// runner can delay well past one tick.
+template <typename Condition>
+bool pumpUntil (Condition done)
+{
+    for (int i = 0; i < 100 && ! done(); ++i)
+        pumpMessages (20);
+    return done();
+}
+
 juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, bool dragged)
 {
     const auto now = juce::Time::getCurrentTime();
@@ -499,15 +510,11 @@ void testRiserSampleEditor()
            "the button shows the sample's name, shortened to fit");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 
-    // The button opens its menu (load / back to noise); dismiss it again.
-    riserButton->triggerClick();
-    pumpMessages (60);
-    juce::PopupMenu::dismissAllActiveMenus();
-    pumpMessages (30);
-
+    // (The button's menu is a native popup window, which can't be opened
+    // headlessly; its "Use built-in noise" item calls clearRiserSample.)
     p.clearRiserSample();
-    pumpMessages (60);   // the editor's timer picks up the change
-    check (riserButton->getButtonText() == "RISER: NOISE" && ! riserButton->getToggleState(),
+    check (pumpUntil ([&] { return riserButton->getButtonText() == "RISER: NOISE"; })
+             && ! riserButton->getToggleState(),
            "going back to noise resets the button");
 
     riserFile.deleteFile();

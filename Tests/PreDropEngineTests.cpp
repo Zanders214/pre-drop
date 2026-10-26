@@ -394,6 +394,49 @@ void testRiserSample()
     check (approx (db, -6.02f, 1.5f), "a sample riser sits at -6 dB re the signal like the noise (measured "
                                         + std::to_string (db).substr (0, 5) + ")");
 
+    // A build-up starts the sample from its very first sample, however long
+    // the riser sat silent before. The sample is +1 for exactly one block after
+    // its loop crossfade and -1 after that, so the first active block's riser
+    // output is positive only if playback starts at the top (starting a block
+    // late, as a position that kept running while silent would, reads -1).
+    {
+        constexpr double sr = 48000.0;
+        constexpr int block = 2048;
+        const int fade = (int) (0.02 * sr);
+        juce::AudioBuffer<float> steps (1, 48000);
+        for (int n = 0; n < steps.getNumSamples(); ++n)
+            steps.setSample (0, n, n < block + fade ? 1.0f : -1.0f);
+
+        const auto riserOutput = [&] (float riserDepth)
+        {
+            PreDropEngine engine;
+            engine.setHpfDepth (0.0f);
+            engine.setReverbDepth (0.0f);
+            engine.setDelayDepth (0.0f);
+            engine.setRiserDepth (riserDepth);
+            engine.setRiserSample (RiserSample::create (steps, sr, sr, "steps"));
+            engine.prepare (sr, 1, block);
+
+            std::vector<float> firstActive;
+            for (int b = 0; b < 6; ++b)
+            {
+                engine.setAmount (b < 5 ? 0.0f : 1.0f);   // five silent blocks, then build
+                auto buffer = makeSine (sr, 220.0, block, 1);
+                engine.process (buffer);
+                if (b == 5)
+                    firstActive.assign (buffer.getReadPointer (0), buffer.getReadPointer (0) + block);
+            }
+            return firstActive;
+        };
+
+        const auto withRiser = riserOutput (0.5f);
+        const auto without   = riserOutput (0.0f);
+        double riserSum = 0.0;
+        for (size_t i = 0; i < withRiser.size(); ++i)
+            riserSum += withRiser[i] - without[i];
+        check (riserSum > 0.0, "a build-up starts the sample from the top after silence");
+    }
+
     // Swapping samples in and out while running stays finite, and the
     // swapped-out sample is handed back for the message thread to free.
     PreDropEngine engine;

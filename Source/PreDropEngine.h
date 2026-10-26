@@ -360,11 +360,6 @@ public:
         const RiserSample* sample = activeRiser.get();
         const bool useSample = sample != nullptr && sample->length() > 0;
 
-        // Each build-up starts the sample from the top: rewind while the riser
-        // is fully down (Amount at 0 or its depth at 0).
-        if (useSample && ! sm.riserLevel.isSmoothing() && sm.riserLevel.getCurrentValue() <= 0.0f)
-            riser.samplePos = 0;
-
         const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
         float signalRms = riserRmsStart;
         for (int n = 0; n < numSamples; ++n)
@@ -374,14 +369,23 @@ public:
 
             if (useSample)
             {
-                // Loop the sample at unit RMS, scaled exactly like the noise.
-                const float gain = sample->unitGain * level * signalRms;
-                const int last = sample->audio.getNumChannels() - 1;
-                for (int ch = 0; ch < channels; ++ch)
-                    data[ch][n] += sample->audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
-
-                if (++riser.samplePos >= sample->length())
+                if (level <= 0.0f)
+                {
+                    // Fully down (Amount or riser depth at 0): hold at the top,
+                    // so the next build-up starts on the sample's first sample.
                     riser.samplePos = 0;
+                }
+                else
+                {
+                    // Loop the sample at unit RMS, scaled exactly like the noise.
+                    const float gain = sample->unitGain * level * signalRms;
+                    const int last = sample->audio.getNumChannels() - 1;
+                    for (int ch = 0; ch < channels; ++ch)
+                        data[ch][n] += sample->audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
+
+                    if (++riser.samplePos >= sample->length())
+                        riser.samplePos = 0;
+                }
 
                 sm.riserCutoff.getNextValue();   // keep the sweep in step for a switch back to noise
                 continue;
