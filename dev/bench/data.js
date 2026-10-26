@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792768618360,
+  "lastUpdate": 1793038592895,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -305,6 +305,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.393,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a106dc8883a693e007b2e839359cf24d1f3483ba",
+          "message": "Merge pull request #13 from Zanders214/claude/riser-sample\n\nRiser: drop in your own sample, looped at the calibrated level",
+          "timestamp": "2026-10-26T19:15:10+01:00",
+          "tree_id": "41fd67449d631d5c6e258e8d8d410a92a8111a7f",
+          "url": "https://github.com/Zanders214/pre-drop/commit/a106dc8883a693e007b2e839359cf24d1f3483ba"
+        },
+        "date": 1793038592245,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 36787.222,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.345,
             "unit": "%"
           }
         ]
