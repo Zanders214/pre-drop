@@ -503,6 +503,55 @@ void testIdleEffectsPassThrough()
     check (runBlocks (20, 1.0f).first == 0.0f, "with every depth at 0 the output is bit-identical at full Amount");
 }
 
+// ---- Test 3f: the high-pass fades in and out of idle without a click. --------
+void testHpfIdleTransitionsAreSmooth()
+{
+    std::printf ("High-pass idle transitions:\n");
+
+    // A 40 Hz bass line, where even a parked 20 Hz high-pass shifts the phase
+    // by tens of degrees: switching straight between filtered and dry would
+    // jump by a large fraction of the amplitude in one sample.
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+    constexpr double freq = 40.0;
+    PreDropEngine engine;
+    engine.setReverbDepth (0.0f);
+    engine.setDelayDepth (0.0f);
+    engine.setRiserDepth (0.0f);
+    engine.prepare (sr, 1, block);
+
+    long sampleIndex = 0;
+    float previous = 0.0f;
+    const auto largestStep = [&] (int blocks, float amount)
+    {
+        engine.setAmount (amount);
+        float largest = 0.0f;
+        for (int b = 0; b < blocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (1, block);
+            for (int n = 0; n < block; ++n, ++sampleIndex)
+                buffer.setSample (0, n, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * freq * (double) sampleIndex / sr));
+            engine.process (buffer);
+            for (int n = 0; n < block; ++n)
+            {
+                largest = std::max (largest, std::abs (buffer.getSample (0, n) - previous));
+                previous = buffer.getSample (0, n);
+            }
+        }
+        return largest;
+    };
+
+    largestStep (20, 0.0f);                                   // settled dry, high-pass idle
+    const float natural = (float) (0.5 * juce::MathConstants<double>::twoPi * freq / sr);
+    const float engage  = largestStep (20, 0.05f);            // HPF to ~24 Hz: blends in
+    const float release = largestStep (40, 0.0f);             // back to 20 Hz: blends out, then idles
+
+    check (engage < natural * 2.0f, "engaging the high-pass on a bass line is click-free (largest step "
+                                       + std::to_string (engage / natural).substr (0, 4) + "x the tone's own)");
+    check (release < natural * 2.0f, "parking the high-pass on a bass line is click-free (largest step "
+                                        + std::to_string (release / natural).substr (0, 4) + "x the tone's own)");
+}
+
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
 void testEmptyBlocks()
 {
@@ -562,6 +611,7 @@ int main()
     testEffectsInSync();
     testRiserSample();
     testIdleEffectsPassThrough();
+    testHpfIdleTransitionsAreSmooth();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 

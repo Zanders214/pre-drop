@@ -195,6 +195,7 @@ public:
         sm.riserCutoff.reset (sampleRate, ramp);
         sm.mix        .reset (sampleRate, ramp);
         sm.trim       .reset (sampleRate, ramp);
+        sm.hpfBlend   .reset (sampleRate, 0.03);   // in / out of the high-pass
 
         // Snap smoothers to the current targets so the first block does not sweep.
         sm.hpfCutoff  .setCurrentAndTargetValue (t.hpfCutoffHz);
@@ -206,6 +207,7 @@ public:
         sm.riserCutoff.setCurrentAndTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sampleRate));
         sm.mix        .setCurrentAndTargetValue (mix);
         sm.trim       .setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
+        sm.hpfBlend   .setCurrentAndTargetValue (t.hpfCutoffHz > minHpfCutoffHz ? 1.0f : 0.0f);
 
         reset();
     }
@@ -302,7 +304,14 @@ public:
         {
             return ! smoother.isSmoothing() && smoother.getCurrentValue() <= off;
         };
-        const bool hpfOn    = runOrIdle (idle.hpf,    settledAtOff (sm.hpfCutoff, minHpfCutoffHz), [this] { hpf.reset(); });
+        // The high-pass is the one effect in line with the signal, and even
+        // parked at 20 Hz it shifts the low end's phase, so it can't simply be
+        // switched out: it blends to the unfiltered signal over a short ramp on
+        // the way out (and back in), and is only skipped once fully dry. The
+        // other effects are added on top, so their own level ramps do that.
+        const bool hpfWanted = ! settledAtOff (sm.hpfCutoff, minHpfCutoffHz);
+        sm.hpfBlend.setTargetValue (hpfWanted ? 1.0f : 0.0f);
+        const bool hpfOn    = runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); });
         const bool reverbOn = runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); });
         const bool delayOn  = runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); });
         const bool riserOn  = runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0; });
@@ -319,8 +328,12 @@ public:
                 lastHpfCutoff = fc;
             }
 
+            const float blend = sm.hpfBlend.getNextValue();
             for (int ch = 0; ch < channels; ++ch)
-                data[ch][n] = hpf.processSample (ch, data[ch][n]);
+            {
+                const float dry = data[ch][n];
+                data[ch][n] = dry + blend * (hpf.processSample (ch, dry) - dry);
+            }
         }
 
         // The high-passed signal is what reverb, delay and riser all ride on; the
@@ -564,6 +577,7 @@ private:
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> riserLevel;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mix;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> trim;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> hpfBlend;   // dry 0 .. filtered 1
     };
     Smoothers sm;
 
