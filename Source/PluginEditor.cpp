@@ -42,8 +42,10 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 {
     // --- Amount knob ---------------------------------------------------------
     amountSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-    amountSlider.setRotaryParameters (juce::degreesToRadians (-135.0f),
-                                      juce::degreesToRadians (135.0f), true);
+    // 270 degree sweep from 7:30 to 4:30. JUCE wants non-negative angles, so
+    // -135..135 degrees is written as the identical 225..495.
+    amountSlider.setRotaryParameters (juce::degreesToRadians (225.0f),
+                                      juce::degreesToRadians (495.0f), true);
     amountSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     amountSlider.setMouseDragSensitivity (220);   // ~220 px of travel for full range
     const float defaultAmount = p.getState().getParameterRange ("amount")
@@ -67,8 +69,8 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
         const auto idx = (size_t) i;
         auto& sl = depthSliders[idx];
         sl.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-        sl.setRotaryParameters (juce::degreesToRadians (-135.0f),
-                                juce::degreesToRadians (135.0f), true);
+        sl.setRotaryParameters (juce::degreesToRadians (225.0f),
+                                juce::degreesToRadians (495.0f), true);
         sl.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         sl.setColour (juce::Slider::rotarySliderFillColourId, depthColour (i));
         sl.setLookAndFeel (&depthLnf);
@@ -86,6 +88,17 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     effectsButton.setLookAndFeel (&lnf);
     effectsButton.onClick = [this] { setDepthPanelOpen (effectsButton.getToggleState()); };
     addAndMakeVisible (effectsButton);
+
+    // The engaged pill's glow extends past the button, so let it paint outside
+    // its bounds; the editor repaints whenever a glow switches on or off.
+    effectsButton.setPaintingIsUnclipped (true);
+
+    // --- RISER sample pill ----------------------------------------------------
+    riserUi.button.setLookAndFeel (&lnf);
+    riserUi.button.setPaintingIsUnclipped (true);
+    riserUi.button.onClick = [this] { showRiserMenu(); };
+    addAndMakeVisible (riserUi.button);
+    updateRiserButton();
 
     // --- Indicators ----------------------------------------------------------
     effectChips.setAmountSource ([this] { return paramValue (processorRef, "amount"); });
@@ -128,6 +141,7 @@ PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
     mixSlider.setLookAndFeel (nullptr);
     trimSlider.setLookAndFeel (nullptr);
     effectsButton.setLookAndFeel (nullptr);
+    riserUi.button.setLookAndFeel (nullptr);
     for (auto& sl : depthSliders)
         sl.setLookAndFeel (nullptr);
 }
@@ -146,8 +160,110 @@ void PreDropAudioProcessorEditor::setDepthPanelOpen (bool shouldBeOpen)
     repaint();
 }
 
+void PreDropAudioProcessorEditor::updateRiserButton()
+{
+    const auto name = processorRef.getRiserSampleName();
+    if (name == riserUi.shownName)
+        return;
+
+    riserUi.shownName = name;
+
+    // Lit (accent pill) while a user sample replaces the built-in noise.
+    auto label = name.isEmpty() ? juce::String ("NOISE")
+                                : juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension().toUpperCase();
+    if (label.length() > 16)
+        label = label.substring (0, 15) + juce::String::fromUTF8 ("\u2026");
+
+    riserUi.button.setButtonText ("RISER: " + label);
+    riserUi.button.setToggleState (name.isNotEmpty(), juce::dontSendNotification);
+    repaint();   // the lit pill's glow reaches beyond the button
+    riserUi.button.setTooltip (name.isEmpty() ? "Built-in noise riser. Click, or drop an audio file here, to use your own sample."
+                                              : "Riser sample: " + name);
+}
+
+void PreDropAudioProcessorEditor::showRiserMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, "Load riser sample...");
+    menu.addItem (2, "Use built-in noise", processorRef.getRiserSampleName().isNotEmpty());
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&riserUi.button),
+                        [safe = juce::Component::SafePointer (this)] (int choice)
+    {
+        if (safe == nullptr)
+            return;
+
+        if (choice == 2)
+        {
+            safe->processorRef.clearRiserSample();
+            safe->updateRiserButton();
+        }
+        else if (choice == 1)
+        {
+            safe->riserUi.chooser = std::make_unique<juce::FileChooser> ("Choose a riser sample", juce::File(),
+                                                                        safe->processorRef.getRiserFileWildcard());
+            safe->riserUi.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                                [safe] (const juce::FileChooser& chooser)
+            {
+                if (safe != nullptr && chooser.getResult().existsAsFile())
+                    safe->loadRiser (chooser.getResult());
+            });
+        }
+    });
+}
+
+void PreDropAudioProcessorEditor::loadRiser (const juce::File& file)
+{
+    if (const auto error = processorRef.loadRiserSample (file); error.isNotEmpty())
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Couldn't use that riser", error);
+
+    updateRiserButton();
+}
+
+bool PreDropAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    return files.size() == 1 && processorRef.isSupportedRiserFile (juce::File (files[0]));
+}
+
+void PreDropAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
+{
+    riserUi.dragActive = true;
+    repaint();
+}
+
+void PreDropAudioProcessorEditor::fileDragExit (const juce::StringArray&)
+{
+    riserUi.dragActive = false;
+    repaint();
+}
+
+void PreDropAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    riserUi.dragActive = false;
+    repaint();
+    loadRiser (juce::File (files[0]));
+}
+
+void PreDropAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
+{
+    if (! riserUi.dragActive)
+        return;
+
+    // Drop target: dim the face and invite the drop, in the accent colour.
+    const float s = uiScale;
+    const auto area = getLocalBounds().toFloat().reduced (8.0f * s);
+    g.setColour (Palette::panelBottom.withAlpha (0.85f));
+    g.fillRoundedRectangle (area, 14.0f * s);
+    g.setColour (Palette::badge);
+    g.drawRoundedRectangle (area, 14.0f * s, juce::jmax (1.0f, 2.0f * s));
+    g.setFont (Fonts::sans (13.0f * s, true, 0.14f));
+    g.drawText ("DROP TO USE AS RISER", area, juce::Justification::centred, false);
+}
+
 void PreDropAudioProcessorEditor::timerCallback()
 {
+    updateRiserButton();
+
     const float a = paramValue (processorRef, "amount");
     const float m = paramValue (processorRef, "mix");
     const float t = paramValue (processorRef, "outputTrim");
@@ -342,6 +458,8 @@ void PreDropAudioProcessorEditor::resized()
     area.removeFromTop (px (8.0f));
     auto buttonRow = area.removeFromTop (px (18.0f));
     effectsButton.setBounds (buttonRow.removeFromRight (px (84.0f)));
+    buttonRow.removeFromRight (px (8.0f));
+    riserUi.button.setBounds (buttonRow);
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
     layout.reveal = area.removeFromTop (px (114.0f));

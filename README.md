@@ -21,6 +21,12 @@ to the same level relative to your signal (-6 dB at full Amount with the effect
 knobs at their 50% default), and the riser follows your track's loudness, so the
 balance holds on quiet and loud material alike.
 
+The riser can be your own sample: it loops (with a short crossfade so the loop point
+doesn't click), restarts from the top at the start of each build-up, and plays at
+the same calibrated level as the built-in noise. The file (up to 60 s) is saved
+inside the plugin state, so your Ableton project keeps its riser even if the
+original file moves.
+
 ## Controls
 
 | Knob        | What it does                                                        |
@@ -28,6 +34,7 @@ balance holds on quiet and loud material alike.
 | **Amount**  | The macro. Drives the whole build-up from 0% (clean) to 100% (peak). |
 | **Mix**     | Global dry/wet so the build-up can sit under the source.             |
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
+| **Riser**   | The riser sound. Built-in noise by default; click **RISER** (or drop a WAV / AIFF / FLAC anywhere on the plugin) to use your own sample instead, and pick *Use built-in noise* to go back. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
@@ -69,6 +76,7 @@ Source/
   PreDropTheme.h             shared palette, fonts, colour + value formatting
   PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
   PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
+  RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
 Tests/
   PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
   PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model

@@ -29,8 +29,36 @@ int main()
     double      phase  = 0.0;
     const double inc   = 2.0 * juce::MathConstants<double>::pi * freq / sr;
 
+    // Halfway through, swap the noise riser for a user sample, so the audio
+    // thread's lock-free hand-over and the sample playback run under RTSan too.
+    // Loading happens here, between callbacks, exactly as the editor does it.
+    const auto riserFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("rt_check_riser.wav");
+    {
+        juce::AudioBuffer<float> riser (2, (int) sr);
+        juce::Random random { 1 };
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < riser.getNumSamples(); ++n)
+                riser.setSample (ch, n, 0.2f * (random.nextFloat() * 2.0f - 1.0f));
+
+        riserFile.deleteFile();
+        juce::WavAudioFormat wav;
+        if (auto out = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (
+                new juce::FileOutputStream (riserFile), sr, 2, 16, {}, 0)))
+            out->writeFromAudioSampleBuffer (riser, 0, riser.getNumSamples());
+    }
+
     for (int b = 0; b < blocks; ++b)
     {
+        if (b == blocks / 2)
+        {
+            const auto error = proc.loadRiserSample (riserFile);
+            if (error.isNotEmpty())
+            {
+                std::printf ("FAIL: could not load the riser sample: %s\n", error.toRawUTF8());
+                return 1;
+            }
+        }
+
         // Fill with a sine so the DSP actually has signal to chew on.
         for (int n = 0; n < bs; ++n)
         {
@@ -46,6 +74,7 @@ int main()
         proc.processBlock (buffer, midi);               // exercises the annotated DSP
     }
 
-    std::printf ("PASS: %d processBlock calls, no RT-safety violations\n", blocks);
+    riserFile.deleteFile();
+    std::printf ("PASS: %d processBlock calls (noise riser, then a sample riser), no RT-safety violations\n", blocks);
     return 0;
 }

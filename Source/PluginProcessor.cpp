@@ -12,15 +12,29 @@ namespace ParamID
     static constexpr const char* hpfDepth    = "hpfDepth";
 }
 
+namespace
+{
+    // Child of the saved state that carries the riser sample, if one is loaded.
+    const juce::Identifier riserStateTag { "RISER_SAMPLE" };
+
+    // Largest file accepted, so a stray long recording can't bloat the project.
+    constexpr juce::int64 maxRiserFileBytes = 64 * 1024 * 1024;
+}
+
 PreDropAudioProcessor::PreDropAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    formats.registerBasicFormats();
+    startTimerHz (4);   // frees riser samples the audio thread has swapped out
 }
 
-PreDropAudioProcessor::~PreDropAudioProcessor() = default;
+PreDropAudioProcessor::~PreDropAudioProcessor()
+{
+    stopTimer();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::createParameterLayout()
 {
@@ -66,6 +80,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
 
 void PreDropAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    // Rebuild the riser sample for this rate first, so prepare() adopts it.
+    currentSampleRate = sampleRate;
+    sendRiserToEngine();
     engine.prepare (sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
 }
 
@@ -131,15 +148,120 @@ void PreDropAudioProcessor::changeProgramName (int, const juce::String&) { /* th
 
 void PreDropAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+
+    const juce::ScopedLock lock (riserLock);
+    if (riser.fileData.getSize() > 0)
+    {
+        juce::ValueTree sample (riserStateTag);
+        sample.setProperty ("name", riser.name, nullptr);
+        sample.setProperty ("data", riser.fileData.toBase64Encoding(), nullptr);
+        state.appendChild (sample, nullptr);
+    }
+
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
 void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInBytes)   // NOSONAR(cpp:S5008): signature fixed by juce::AudioProcessor
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (apvts.state.getType()))
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+        return;
+
+    auto state = juce::ValueTree::fromXml (*xml);
+    const auto sample = state.getChildWithName (riserStateTag);
+    state.removeChild (sample, nullptr);
+    apvts.replaceState (state);
+
+    juce::MemoryBlock fileData;
+    if (sample.isValid() && fileData.fromBase64Encoding (sample["data"].toString())
+        && loadRiserFromData (fileData, sample["name"].toString()).isEmpty())
+        return;
+
+    clearRiserSample();
+}
+
+// --- Riser sample ------------------------------------------------------------
+
+bool PreDropAudioProcessor::isSupportedRiserFile (const juce::File& file) const
+{
+    return formats.findFormatForFileExtension (file.getFileExtension()) != nullptr;
+}
+
+juce::String PreDropAudioProcessor::loadRiserSample (const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return "\"" + file.getFileName() + "\" could not be found.";
+    if (! isSupportedRiserFile (file))
+        return "\"" + file.getFileName() + "\" is not an audio file the riser can use (try WAV, AIFF or FLAC).";
+    if (file.getSize() > maxRiserFileBytes)
+        return "\"" + file.getFileName() + "\" is too large for a riser (64 MB max).";
+
+    juce::MemoryBlock fileData;
+    if (! file.loadFileAsData (fileData))
+        return "\"" + file.getFileName() + "\" could not be read.";
+
+    return loadRiserFromData (fileData, file.getFileName());
+}
+
+juce::String PreDropAudioProcessor::loadRiserFromData (const juce::MemoryBlock& fileData, const juce::String& name)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader (
+        formats.createReaderFor (std::make_unique<juce::MemoryInputStream> (fileData, false)));
+
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0)
+        return "\"" + name + "\" is not an audio file the riser can use (try WAV, AIFF or FLAC).";
+
+    if ((double) reader->lengthInSamples / reader->sampleRate > maxRiserSeconds)
+        return "\"" + name + "\" is longer than " + juce::String ((int) maxRiserSeconds) + " seconds.";
+
+    RiserSource loaded;
+    loaded.fileData   = fileData;
+    loaded.name       = name;
+    loaded.sampleRate = reader->sampleRate;
+    loaded.audio.setSize ((int) juce::jmin (2u, reader->numChannels), (int) reader->lengthInSamples);
+    reader->read (&loaded.audio, 0, (int) reader->lengthInSamples, 0, true, loaded.audio.getNumChannels() > 1);
+
+    // Reject silence up front rather than leaving the riser mysteriously quiet.
+    if (RiserSample::create (loaded.audio, loaded.sampleRate, loaded.sampleRate, name) == nullptr)
+        return "\"" + name + "\" is silent.";
+
+    {
+        const juce::ScopedLock lock (riserLock);
+        riser = std::move (loaded);
+    }
+    sendRiserToEngine();
+    return {};
+}
+
+void PreDropAudioProcessor::clearRiserSample()
+{
+    {
+        const juce::ScopedLock lock (riserLock);
+        riser = {};
+    }
+    sendRiserToEngine();
+}
+
+void PreDropAudioProcessor::sendRiserToEngine()
+{
+    // Before prepareToPlay there is no sample rate to build for; prepareToPlay
+    // calls this again once there is.
+    const double rate = currentSampleRate.load();
+    if (rate <= 0.0)
+        return;
+
+    const juce::ScopedLock lock (riserLock);
+    auto sample = riser.audio.getNumSamples() > 0
+                    ? RiserSample::create (riser.audio, riser.sampleRate, rate, riser.name)
+                    : nullptr;
+    engine.setRiserSample (sample != nullptr ? std::move (sample) : RiserSample::none());
+}
+
+void PreDropAudioProcessor::timerCallback()
+{
+    engine.collectRetiredRiserSamples();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

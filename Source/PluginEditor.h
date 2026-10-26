@@ -17,6 +17,7 @@
     drawn natively (no WebView) and scales proportionally from the 360 px design.
 */
 class PreDropAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                    public juce::FileDragAndDropTarget,
                                     private juce::Timer
 {
 public:
@@ -24,10 +25,20 @@ public:
     ~PreDropAudioProcessorEditor() override;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
+
+    // Drop an audio file anywhere on the editor to use it as the riser.
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
+    void fileDragExit (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
 
 private:
     void timerCallback() override;
+    void showRiserMenu();
+    void loadRiser (const juce::File& file);
+    void updateRiserButton();
     void paintHeader (juce::Graphics&, float scale) const;
     void paintSliderLabels (juce::Graphics&, float scale) const;
     void paintDepthPanel (juce::Graphics&, float scale) const;
@@ -79,6 +90,17 @@ private:
         std::array<float, numDepths> depths { -1.0f, -1.0f, -1.0f, -1.0f };
     };
     LastValues last;
+
+    // The RISER pill beside EFFECTS: shows the sample in use, opens the
+    // load / back-to-noise menu, and owns the file chooser while it is open.
+    struct RiserControl
+    {
+        juce::TextButton                   button;
+        std::unique_ptr<juce::FileChooser> chooser;
+        juce::String                       shownName { "?" };   // forces the first update
+        bool                               dragActive = false;
+    };
+    RiserControl riserUi;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessorEditor)
 };

@@ -128,6 +128,25 @@ float settledChange (PreDropAudioProcessor& p, int block, int blocks)
     return (float) std::sqrt (sum / block);
 }
 
+// Writes a 16-bit WAV of `seconds` of noise (or silence) to the temp folder.
+juce::File writeWav (const juce::String& name, double sampleRate, double seconds, int channels, bool silent = false)
+{
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile (name);
+    file.deleteFile();
+
+    juce::AudioBuffer<float> audio (channels, (int) (sampleRate * seconds));
+    juce::Random random { 5 };
+    for (int ch = 0; ch < channels; ++ch)
+        for (int n = 0; n < audio.getNumSamples(); ++n)
+            audio.setSample (ch, n, silent ? 0.0f : 0.2f * (random.nextFloat() * 2.0f - 1.0f));
+
+    juce::WavAudioFormat wav;
+    if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (
+            new juce::FileOutputStream (file), sampleRate, (unsigned int) channels, 16, {}, 0)))
+        writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples());
+    return file;
+}
+
 void pumpMessages (int milliseconds)
 {
     juce::MessageManager::getInstance()->runDispatchLoopUntil (milliseconds);
@@ -382,6 +401,118 @@ void testBuildUpCurveDrag()
     curve->mouseUp (mouseAt (*curve, { w * 2.0f, y }, true));
 }
 
+void testRiserSampleLoading()
+{
+    std::printf ("Riser sample (processor):\n");
+
+    const auto riserFile = writeWav ("predrop-test-riser.wav", 44100.0, 0.5, 2);
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+
+    check (p.getRiserSampleName().isEmpty(), "the built-in noise riser is the default");
+    check (p.isSupportedRiserFile (riserFile) && ! p.isSupportedRiserFile (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("notes.txt")),
+           "audio files are accepted and other files are not");
+
+    const auto error = p.loadRiserSample (riserFile);
+    check (error.isEmpty() && p.getRiserSampleName() == "predrop-test-riser.wav",
+           "a WAV loads as the riser (" + (error.isEmpty() ? juce::String ("ok") : error).toStdString() + ")");
+
+    setParam (p, "amount", 1.0f);
+    const float change = settledChange (p, 512, 40);
+    check (std::isfinite (change) && change > 0.05f, "the sample riser plays through the processor");
+
+    // The sample travels inside the saved state, so a project keeps its riser.
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    riserFile.deleteFile();   // gone from disk: the restore must use the embedded copy
+
+    PreDropAudioProcessor restored;
+    restored.setStateInformation (state.getData(), (int) state.getSize());
+    check (restored.getRiserSampleName() == "predrop-test-riser.wav", "the riser sample is restored from the saved state");
+    restored.prepareToPlay (48000.0, 512);
+    check (std::isfinite (settledChange (restored, 512, 10)), "a restored riser plays once the host prepares it");
+
+    // A state saved with the built-in noise clears a loaded sample.
+    PreDropAudioProcessor noiseOnly;
+    juce::MemoryBlock noiseState;
+    noiseOnly.getStateInformation (noiseState);
+    restored.setStateInformation (noiseState.getData(), (int) noiseState.getSize());
+    check (restored.getRiserSampleName().isEmpty(), "restoring a noise-riser state goes back to noise");
+
+    p.clearRiserSample();
+    check (p.getRiserSampleName().isEmpty(), "clearing goes back to the built-in noise");
+
+    // Files that can't be used are refused with a reason, leaving the riser as it was.
+    const auto silent  = writeWav ("predrop-test-silent.wav", 44100.0, 0.5, 1, true);
+    const auto tooLong = writeWav ("predrop-test-long.wav", 8000.0, PreDropAudioProcessor::maxRiserSeconds + 1.0, 1);
+    const auto text    = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-test.txt");
+    text.replaceWithText ("not audio");
+
+    check (p.loadRiserSample (silent).contains ("silent"), "a silent file is refused");
+    check (p.loadRiserSample (tooLong).contains ("longer than"), "an over-long file is refused");
+    check (p.loadRiserSample (text).isNotEmpty(), "a non-audio file is refused");
+    check (p.loadRiserSample (juce::File ("/no/such/riser.wav")).contains ("could not be found"), "a missing file is refused");
+    check (p.getRiserSampleName().isEmpty(), "a refused file leaves the riser unchanged");
+
+    for (const auto& f : { silent, tooLong, text })
+        f.deleteFile();
+}
+
+void testRiserSampleEditor()
+{
+    std::printf ("Riser sample (editor):\n");
+
+    const auto riserFile = writeWav ("predrop-editor-riser.wav", 48000.0, 0.5, 2);
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    auto* ed = dynamic_cast<PreDropAudioProcessorEditor*> (editor.get());
+
+    juce::TextButton* riserButton = nullptr;
+    for (auto* button : findChildren<juce::TextButton> (*editor))
+        if (button->getButtonText().startsWith ("RISER"))
+            riserButton = button;
+
+    check (ed != nullptr && riserButton != nullptr, "the editor has a RISER button");
+    if (ed == nullptr || riserButton == nullptr)
+        return;
+
+    check (riserButton->getButtonText() == "RISER: NOISE" && ! riserButton->getToggleState(),
+           "it shows the built-in noise by default");
+
+    check (ed->isInterestedInFileDrag ({ riserFile.getFullPathName() }), "dragging one audio file is accepted");
+    check (! ed->isInterestedInFileDrag ({ "/tmp/notes.txt" }), "dragging a non-audio file is not");
+    check (! ed->isInterestedInFileDrag ({ riserFile.getFullPathName(), riserFile.getFullPathName() }),
+           "dragging several files is not");
+
+    // While a file hovers, the face shows a drop target over everything.
+    const auto before = render (*editor);
+    ed->fileDragEnter ({ riserFile.getFullPathName() }, 10, 10);
+    check (pixelsChanged (before, render (*editor)) > 2000, "hovering a file shows the drop overlay");
+    ed->fileDragExit ({ riserFile.getFullPathName() });
+    check (pixelsChanged (before, render (*editor)) == 0, "leaving removes the overlay again");
+
+    ed->fileDragEnter ({ riserFile.getFullPathName() }, 10, 10);
+    ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
+    check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
+    check (riserButton->getButtonText() == "RISER: PREDROP-EDITOR-" + juce::String::fromUTF8 ("\u2026"),
+           "the button shows the sample's name, shortened to fit");
+    check (riserButton->getToggleState(), "the button lights up while a sample is in use");
+
+    // The button opens its menu (load / back to noise); dismiss it again.
+    riserButton->triggerClick();
+    pumpMessages (60);
+    juce::PopupMenu::dismissAllActiveMenus();
+    pumpMessages (30);
+
+    p.clearRiserSample();
+    pumpMessages (60);   // the editor's timer picks up the change
+    check (riserButton->getButtonText() == "RISER: NOISE" && ! riserButton->getToggleState(),
+           "going back to noise resets the button");
+
+    riserFile.deleteFile();
+}
+
 void testUnboundIndicators()
 {
     std::printf ("Indicators without a data source:\n");
@@ -443,6 +574,8 @@ int main()
     testStateRoundTrip();
     testEditor();
     testBuildUpCurveDrag();
+    testRiserSampleLoading();
+    testRiserSampleEditor();
     testUnboundIndicators();
     testButtonStates();
 
