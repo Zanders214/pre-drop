@@ -23,6 +23,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -1022,6 +1023,56 @@ void testEffectPlugins()
     }
 }
 
+// A host playhead reporting a fixed tempo, to see it reach a hosted plug-in.
+struct FixedTempoPlayHead : juce::AudioPlayHead
+{
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setTimeInSamples (0);   // hosts always report it; VST3 requires it
+        info.setBpm (128.0);
+        info.setIsPlaying (true);
+        return info;
+    }
+};
+
+void testEffectPluginHostIntegration()
+{
+    std::printf ("Effect plug-ins and the host:\n");
+    using Slot = PreDropAudioProcessor::EffectSlot;
+    const juce::File vst3 (PREDROP_TEST_VST3);
+    if (! vst3.exists())
+        return;
+
+    // Tempo-synced effects need the host's tempo and transport: the playhead
+    // PreDrop gets from the host is handed to its plug-ins as it processes.
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    p.loadEffectPlugin (Slot::delay, vst3);
+    FixedTempoPlayHead hostPlayHead;
+    p.setPlayHead (&hostPlayHead);
+    juce::AudioBuffer<float> buffer (2, 512);
+    buffer.clear();
+    juce::MidiBuffer midi;
+    p.processBlock (buffer, midi);
+    auto* hosted = p.getEffectPluginInstance (Slot::delay);
+    check (hosted != nullptr && hosted->getPlayHead() == &hostPlayHead,
+           "a hosted plug-in gets the host's playhead (tempo, position, transport)");
+    check (p.getEffectPluginInstance (Slot::reverb) == nullptr, "an empty slot has no plug-in instance");
+
+    // Hosts may restore a project on a worker thread. Plug-ins and their
+    // windows belong to the message thread, so the slot is restored there.
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    PreDropAudioProcessor restored;
+    std::thread worker ([&] { restored.setStateInformation (state.getData(), (int) state.getSize()); });
+    worker.join();
+    check (restored.getEffectPluginName (Slot::delay).isEmpty(),
+           "restoring on a worker thread doesn't create the plug-in there");
+    check (pumpUntil ([&] { return restored.getEffectPluginName (Slot::delay) == "ZandersPreDrop"; }),
+           "the message thread loads it right after");
+}
+
 void testHostedEffectEdges()
 {
     std::printf ("Hosted effect edge cases:\n");
@@ -1138,6 +1189,7 @@ int main()
     testReturnRole();
     testEffectPlugins();
     testHostedEffectEdges();
+    testEffectPluginHostIntegration();
     testEmptyTrackList();
     testUnboundIndicators();
     testButtonStates();

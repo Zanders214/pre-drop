@@ -42,6 +42,14 @@ public:
     juce::AudioPluginInstance* getPlugin() const noexcept { return plugin.get(); }
     const juce::PluginDescription& getDescription() const { return description; }
 
+    /** Passes on the host's playhead (tempo, position, transport). Audio thread,
+        before process(): a plug-in reads it while processing. */
+    void setPlayHead (juce::AudioPlayHead* playHead) noexcept
+    {
+        if (plugin != nullptr)
+            plugin->setPlayHead (playHead);
+    }
+
     /** (Re)prepares the plug-in. Never while process() can run. */
     void prepare (double sampleRate, int maximumBlockSize)
     {

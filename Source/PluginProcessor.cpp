@@ -78,6 +78,7 @@ PreDropAudioProcessor::PreDropAudioProcessor()
 PreDropAudioProcessor::~PreDropAudioProcessor()
 {
     stopTimer();
+    cancelPendingUpdate();
     closeEffectPluginWindows();   // their editors go before their plug-ins
     for (auto* id : linkedParameters)
         apvts.removeParameterListener (id, this);
@@ -242,11 +243,16 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         engine.setRiserDepth  (param (ParamID::riserDepth));
     }
 
-    // A loaded reverb / delay plug-in takes over from the built-in one.
-    const auto external = [] (RtHandoff<HostedEffect>& handoff) -> PreDropEngine::ExternalEffect*
+    // A loaded reverb / delay plug-in takes over from the built-in one. It gets
+    // the host's playhead, so tempo-synced effects follow the project's tempo
+    // and transport just as they would on a track.
+    const auto external = [this] (RtHandoff<HostedEffect>& handoff) -> PreDropEngine::ExternalEffect*
     {
         auto* fx = handoff.acquire();
-        return fx != nullptr && ! fx->isEmpty() ? fx : nullptr;
+        if (fx == nullptr || fx->isEmpty())
+            return nullptr;
+        fx->setPlayHead (getPlayHead());
+        return fx;
     };
     engine.setExternalEffects (external (effectPlugins.slots[0].handoff), external (effectPlugins.slots[1].handoff));
 
@@ -333,13 +339,20 @@ void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInByt
     apvts.replaceState (state);
     updateLink();   // the restored role may differ
 
-    for (int i = 0; i < (int) effectPlugins.slots.size(); ++i)
+    // Plug-ins (and any open plug-in window) may only be created and destroyed
+    // on the message thread, and hosts can restore state on any thread, so the
+    // slots are restored there.
+    if (juce::MessageManager::existsAndIsCurrentThread())
     {
-        const auto saved = plugins.getChildWithProperty ("index", i);
-        if (saved.isValid())
-            restoreEffectPlugin ((EffectSlot) i, saved);
-        else
-            useBuiltInEffect ((EffectSlot) i);
+        restoreEffectPlugins (plugins);
+    }
+    else
+    {
+        {
+            const juce::ScopedLock lock (effectPlugins.lock);
+            effectPlugins.pendingRestore = plugins.isValid() ? plugins.createCopy() : juce::ValueTree (effectPluginsTag);
+        }
+        triggerAsyncUpdate();
     }
 
     juce::MemoryBlock fileData;
@@ -425,6 +438,29 @@ void PreDropAudioProcessor::sendRiserToEngine()
                     ? RiserSample::create (riser.audio, riser.sampleRate, rate, riser.name)
                     : nullptr;
     engine.setRiserSample (sample != nullptr ? std::move (sample) : RiserSample::none());
+}
+
+void PreDropAudioProcessor::handleAsyncUpdate()
+{
+    juce::ValueTree saved;
+    {
+        const juce::ScopedLock lock (effectPlugins.lock);
+        std::swap (saved, effectPlugins.pendingRestore);
+    }
+    if (saved.isValid())
+        restoreEffectPlugins (saved);
+}
+
+void PreDropAudioProcessor::restoreEffectPlugins (const juce::ValueTree& saved)
+{
+    for (int i = 0; i < (int) effectPlugins.slots.size(); ++i)
+    {
+        const auto slot = saved.getChildWithProperty ("index", i);
+        if (slot.isValid())
+            restoreEffectPlugin ((EffectSlot) i, slot);
+        else
+            useBuiltInEffect ((EffectSlot) i);
+    }
 }
 
 void PreDropAudioProcessor::timerCallback()
@@ -562,6 +598,7 @@ juce::String PreDropAudioProcessor::loadEffectPlugin (EffectSlot slot, const juc
 juce::String PreDropAudioProcessor::installEffectPlugin (EffectSlot slot, const juce::PluginDescription& description,
                                                          const juce::MemoryBlock* pluginState)
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     const double rate = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 44100.0;
     juce::String error;
     auto instance = effectPlugins.formats.createPluginInstance (description, rate, effectPlugins.blockSize, error);
@@ -626,6 +663,7 @@ void PreDropAudioProcessor::restoreEffectPlugin (EffectSlot slot, const juce::Va
 
 void PreDropAudioProcessor::useBuiltInEffect (EffectSlot slot)
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     auto none = std::make_unique<HostedEffect>();
 
     const juce::ScopedLock lock (effectPlugins.lock);
@@ -665,6 +703,7 @@ bool PreDropAudioProcessor::effectPluginLeaksDry (EffectSlot slot) const
 
 void PreDropAudioProcessor::showEffectPluginWindow (EffectSlot slot)
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     auto& state = effectPlugins.slots[(size_t) slot];
     if (state.latest == nullptr || state.latest->isEmpty())
         return;
@@ -681,8 +720,16 @@ void PreDropAudioProcessor::showEffectPluginWindow (EffectSlot slot)
     state.window->toFront (true);
 }
 
+juce::AudioPluginInstance* PreDropAudioProcessor::getEffectPluginInstance (EffectSlot slot) const
+{
+    const juce::ScopedLock lock (effectPlugins.lock);
+    const auto* fx = effectPlugins.slots[(size_t) slot].latest;
+    return fx != nullptr ? fx->getPlugin() : nullptr;
+}
+
 void PreDropAudioProcessor::closeEffectPluginWindows()
 {
+    JUCE_ASSERT_MESSAGE_THREAD
     for (auto& slot : effectPlugins.slots)
         slot.window.reset();
 }

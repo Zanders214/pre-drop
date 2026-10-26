@@ -29,6 +29,7 @@
 class PreDropAudioProcessor : public juce::AudioProcessor,
                               public LinkHub::LinkedTrack,
                               private juce::AudioProcessorValueTreeState::Listener,
+                              private juce::AsyncUpdater,
                               private juce::Timer
 {
 public:
@@ -132,6 +133,9 @@ public:
     void showEffectPluginWindow (EffectSlot slot);
     void closeEffectPluginWindows();
 
+    /** The slot's plug-in instance, or nullptr for the built-in effect. */
+    juce::AudioPluginInstance* getEffectPluginInstance (EffectSlot slot) const;
+
     /** VST3 plug-ins in the standard folders (found by name, nothing loaded). */
     static juce::Array<juce::File> findInstalledVst3Plugins();
 
@@ -139,6 +143,8 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void timerCallback() override;
+    void handleAsyncUpdate() override;
+    void restoreEffectPlugins (const juce::ValueTree& saved);
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     juce::String installEffectPlugin (EffectSlot slot, const juce::PluginDescription& description,
                                       const juce::MemoryBlock* pluginState);
@@ -201,6 +207,7 @@ private:
         juce::CriticalSection          lock;
         std::array<EffectSlotState, 2> slots;
         int                            blockSize = 512;
+        juce::ValueTree                pendingRestore;   // saved plug-ins for the message thread to load
     };
     EffectPlugins effectPlugins;
 
