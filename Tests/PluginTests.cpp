@@ -509,7 +509,7 @@ void testRiserSampleEditor()
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
     check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
     const auto label = riserButton->getButtonText();
-    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::fromUTF8 ("\u2026")),
+    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
            "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 

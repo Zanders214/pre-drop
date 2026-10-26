@@ -322,7 +322,8 @@ void PreDropAudioProcessorEditor::fitRiserLabel()
     {
         const auto font = Fonts::sans (10.0f * uiScale, true, 0.16f);         // the pill's caption font
         const float room = (float) riserUi.button.getWidth() - 30.0f * uiScale; // dot, gap and padding
-        const auto ellipsis = juce::String::fromUTF8 ("\u2026");
+        // From the code point: a "\u2026" literal isn't UTF-8 under MSVC's default code page.
+        const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
         auto kept = label;
         while (kept.isNotEmpty() && textWidth (font, "RISER: " + label) > room)
         {
