@@ -29,32 +29,32 @@ original file moves.
 
 ## Choosing which tracks get which effects
 
-Put PreDrop on your **master** (it starts as **MAIN**) and open **TRACKS**:
+Put PreDrop on your **master**: it's the **MAIN**, and on its own it works on the whole
+mix. To give only some tracks the effects, **add PreDrop to those tracks**: with a
+main already in the set, a new PreDrop joins as a **TRACK** by itself. From then on
+the main keeps the Amount knob, the effect depths and the riser, and the linked tracks
+apply the high-pass, reverb and delay, so the drums (with no PreDrop) stay dry.
 
-- **ALL TRACKS** (default): PreDrop works on the whole mix, as a single instance always has.
-- **SELECTED TRACKS**: add PreDrop to the tracks you want to shape (say guitar and piano)
-  and click its header pill to switch it to **TRACK**. Each linked track appears in the
-  main's list with an **HPF / REV / DLY** level (plus an **ALL** row per column): its
-  share of the main's depth for that effect, 100% by default and "off" at 0%. Drag a
-  level up or down, click to toggle off / 100%, double-click to reset. So the guitar
-  can get all the reverb, the piano 40% of it, and the drums (with no PreDrop, or
-  everything at 0%) stay dry. The main keeps the Amount knob, the effect depths and
-  the riser; every track follows them, so one knob (or one automation lane) still
-  drives the whole build-up.
-
-A track's levels are its own parameters, so they save with the set and can be
-automated per track (they're also on the TRACK's own face).
+In the main's **TRACKS** panel each linked track has an **HPF / REV / DLY** level (plus
+an **ALL** row per column): its share of the main's depth for that effect, 100% by
+default and "off" at 0%. Drag a level up or down, click to toggle off / 100%,
+double-click to reset. So the guitar can get all the reverb, the piano 40% of it, and
+everything follows one knob (or one automation lane). A track's levels are its own
+parameters, so they save with the set and can be automated per track (they're also on
+the TRACK's own face, along with its name: the host's, or double-click to type one).
 
 **Without a PreDrop on every track: use a return.** Put PreDrop on a **return track**
-and click its pill until it says **RETURN**. It adds reverb and delay, wet only, to
-whatever the tracks send it, following the main's Amount and depths at the same
-calibrated level; each track's **send knob** in Ableton is its amount. (The high-pass
-can't work this way, since it has to sit on the track itself, and the amounts live
-on the send knobs rather than in PreDrop's list.) TRACKs and RETURNs can be mixed
-freely; the main's TRACKS panel shows how many returns are linked. Its name in the list is the host's track name, or one you
-double-click to type in. With no main, or the main on ALL TRACKS, a TRACK passes its
-audio through untouched. (Linking works because hosts like Ableton Live run every
-plugin instance in one process.)
+and choose **RETURN** from its header pill. It adds reverb and delay, wet only, to
+whatever the tracks send it, following the main at the same calibrated level; each
+track's **send knob** in Ableton is its amount. (The high-pass can't work this way,
+since it has to sit on the track itself, and the amounts live on the send knobs
+rather than in PreDrop's list.) TRACKs and RETURNs can be mixed freely.
+
+The header pill shows each PreDrop's role and opens a menu to change it: **MAIN**
+(on your master), **TRACK** (on a track), **RETURN** (on a return track). A TRACK with
+no main passes its audio through untouched, and a RETURN with no main is silent.
+(Linking works because hosts like Ableton Live run every plugin instance in one
+process.)
 
 ## Controls
 
@@ -63,8 +63,8 @@ plugin instance in one process.)
 | **Amount**  | The macro. Drives the whole build-up from 0% (clean) to 100% (peak). |
 | **Mix**     | Global dry/wet so the build-up can sit under the source.             |
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
-| **MAIN / TRACK / RETURN** | The header pill: MAIN on your master, TRACK on a track that should follow it, RETURN on a return track fed by sends (see above). |
-| **Tracks**  | On the main: ALL TRACKS or SELECTED TRACKS, and per-track HPF / REV / DLY levels. |
+| **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
+| **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
 | **Riser**   | The riser sound. Built-in noise by default; click **RISER** (or drop a WAV / AIFF / FLAC anywhere on the plugin) to use your own sample instead, and pick *Use built-in noise* to go back. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 

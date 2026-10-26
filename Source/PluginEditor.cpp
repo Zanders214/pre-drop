@@ -112,18 +112,8 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 
     link.roleButton.setLookAndFeel (&lnf);
     link.roleButton.setPaintingIsUnclipped (true);
-    link.roleButton.setTooltip ("MAIN: put this on your master; it holds the Amount knob and the riser.\n"
-                                "TRACK: put this on a track; it follows the main at its own effect levels.\n"
-                                "RETURN: put this on a return track; it adds reverb and delay to what each\n"
-                                "track sends it, and each send knob sets that track's amount.\n"
-                                "Click to switch.");
-    link.roleButton.onClick = [this]
-    {
-        using Role = PreDropAudioProcessor::Role;
-        const auto role = processorRef.getRole();
-        processorRef.setRole (role == Role::main ? Role::track : role == Role::track ? Role::returnTrack : Role::main);
-        applyRole();
-    };
+    link.roleButton.setTooltip ("What this PreDrop does: MAIN on your master, TRACK on a track, RETURN on a return track. Click to choose.");
+    link.roleButton.onClick = [this] { showRoleMenu(); };
     addAndMakeVisible (link.roleButton);
 
     addChildComponent (link.matrix);
@@ -207,6 +197,28 @@ bool PreDropAudioProcessorEditor::isReturnMode() const noexcept
     return processorRef.getRole() == PreDropAudioProcessor::Role::returnTrack;
 }
 
+void PreDropAudioProcessorEditor::showRoleMenu()
+{
+    using Role = PreDropAudioProcessor::Role;
+    const auto current = processorRef.getRole();
+
+    // Item ids are the role + 1 (0 means the menu was dismissed).
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("This PreDrop is the...");
+    menu.addItem (1 + (int) Role::main,        "MAIN: on your master. Amount knob, riser, track list",          true, current == Role::main);
+    menu.addItem (1 + (int) Role::track,       "TRACK: on a track. Its own high-pass, reverb and delay levels", true, current == Role::track);
+    menu.addItem (1 + (int) Role::returnTrack, "RETURN: on a return track. Reverb and delay for its sends",     true, current == Role::returnTrack);
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&link.roleButton),
+                        [safe = juce::Component::SafePointer (this)] (int choice)
+    {
+        if (safe == nullptr || choice <= 0)
+            return;
+        safe->processorRef.setRole ((Role) (choice - 1));
+        safe->applyRole();
+    });
+}
+
 void PreDropAudioProcessorEditor::applyRole()
 {
     const bool track = isTrackMode();
@@ -249,7 +261,7 @@ float PreDropAudioProcessorEditor::displayedAmount() const
         return paramValue (processorRef, "amount");
 
     const auto& hub = processorRef.getLinkHub();
-    return hub.tracksActive() ? hub.mainState().amount.load() : 0.0f;
+    return hub.linkActive() ? hub.mainState().amount.load() : 0.0f;
 }
 
 float PreDropAudioProcessorEditor::displayedDepth (const char* depthId) const
@@ -264,7 +276,7 @@ float PreDropAudioProcessorEditor::displayedDepth (const char* depthId) const
                       : id == "reverbDepth" ? LinkHub::Effect::reverb
                       : LinkHub::Effect::delay;
     const auto& hub = processorRef.getLinkHub();
-    if (id == "riserDepth" || ! hub.tracksActive())
+    if (id == "riserDepth" || ! hub.linkActive())
         return 0.0f;
     return hub.mainState().depths[(size_t) effect].load() * processorRef.getLinkLevel (effect);
 }

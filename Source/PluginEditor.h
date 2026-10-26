@@ -58,6 +58,7 @@ private:
     // Linking. "Track mode" covers TRACK and RETURN: both follow the main.
     bool isTrackMode() const noexcept;
     bool isReturnMode() const noexcept;
+    void showRoleMenu();
     void applyRole();
     float displayedAmount() const;                 // the main's, as a TRACK
     float displayedDepth (const char* depthId) const;

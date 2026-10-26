@@ -17,11 +17,12 @@
     and the decoded audio is rebuilt for the engine at the host's sample rate.
 
     Linking: each instance is MAIN (normally on the master), TRACK or RETURN.
-    The main's "applies to" switch picks ALL TRACKS (it processes the whole mix,
-    as a single PreDrop always has) or SELECTED TRACKS (it only adds the riser;
+    With nothing linked the main processes the whole mix, as a single PreDrop
+    always has. Once any TRACK or RETURN links, the main only adds the riser:
     every linked TRACK applies the effects at its own level per effect, and
     every RETURN adds reverb and delay, wet only, to whatever the tracks send
-    it). Tracks and returns follow the main's Amount and depths. See LinkHub.
+    it. Both follow the main's Amount and depths. A new instance joins as a
+    TRACK when a main already exists. See LinkHub.
 */
 class PreDropAudioProcessor : public juce::AudioProcessor,
                               public LinkHub::LinkedTrack,
@@ -87,8 +88,6 @@ public:
 
     Role getRole() const noexcept;               // any thread
     void setRole (Role newRole);
-    bool appliesToSelectedTracks() const noexcept;   // any thread
-    void setAppliesToSelectedTracks (bool selectedOnly);
 
     /** True for TRACK and RETURN: instances that follow the main. */
     bool followsMain() const noexcept { return getRole() != Role::main; }

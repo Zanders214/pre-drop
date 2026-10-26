@@ -217,9 +217,8 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 12, "twelve parameters are exposed");
-    check (! p.getState().getParameter ("role")->isAutomatable() && ! p.getState().getParameter ("scope")->isAutomatable(),
-           "the MAIN / TRACK role and the applies-to choice stay out of automation");
+    check (p.getParameters().size() == 11, "eleven parameters are exposed");
+    check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
     check (approx (param (p, "outputTrim"), 0.0f, 1.0e-6f), "output trim defaults to 0 dB");
@@ -570,12 +569,14 @@ void testLinkHub()
     check (! hub.claimMain (&b) && ! hub.isMain (&b), "a second claim is refused while the main exists");
     check (hub.claimMain (&a), "claiming again as the main is fine");
 
-    hub.mainState().selectedTracksOnly.store (true);
-    check (hub.tracksActive(), "tracks are active while the main applies to selected tracks");
+    check (! hub.linkActive(), "with nothing linked the link is idle: the main works on the whole mix");
+    hub.addReturn (&b);
+    check (hub.linkActive(), "linking a follower activates it");
     hub.releaseMain (&b);
     check (hub.isMain (&a), "only the main itself can release the slot");
     hub.releaseMain (&a);
-    check (! hub.hasMain() && ! hub.tracksActive(), "releasing the main deactivates the tracks");
+    check (! hub.hasMain() && ! hub.linkActive(), "releasing the main deactivates the link");
+    hub.removeReturn (&b);
     check (hub.claimMain (&b), "the slot is free for the next main");
 }
 
@@ -585,13 +586,28 @@ void testLinkedProcessing()
     using Role = PreDropAudioProcessor::Role;
     using Effect = LinkHub::Effect;
 
-    PreDropAudioProcessor master;
-    check (master.getRole() == Role::main && master.isLinkMain(), "a new PreDrop is a MAIN and takes the link");
+    // A TRACK with no main anywhere passes its audio through untouched.
+    {
+        PreDropAudioProcessor orphan;
+        orphan.setRole (Role::track);
+        orphan.prepareToPlay (48000.0, 512);
+        setParam (orphan, "amount", 1.0f);
+        check (settledChange (orphan, 512, 20) == 0.0f, "a TRACK with no main passes audio through untouched");
+    }
 
+    PreDropAudioProcessor master;
+    check (master.getRole() == Role::main && master.isLinkMain(), "the first PreDrop is a MAIN and takes the link");
+    master.prepareToPlay (48000.0, 512);
+    setParam (master, "amount", 1.0f);
+    setParam (master, "riserDepth", 0.0f);   // keeps the main's own output comparable
+    check (! master.getLinkHub().linkActive() && settledChange (master, 512, 40) > 0.05f,
+           "with nothing linked the main processes the whole mix");
+
+    // Adding PreDrop to tracks is all it takes: they join as TRACKs.
     PreDropAudioProcessor guitar, drums;
-    guitar.setRole (Role::track);
-    drums.setRole (Role::track);
-    check (master.getLinkHub().getTracks().size() == 2, "tracks set to TRACK appear in the main's list");
+    check (guitar.getRole() == Role::track && drums.getRole() == Role::track,
+           "PreDrops added while a main exists join as TRACKs");
+    check (master.getLinkHub().getTracks().size() == 2 && master.getLinkHub().linkActive(), "they appear in the main's list");
     check (guitar.getTrackName() == "Track 1" && drums.getTrackName() == "Track 2", "unnamed tracks are numbered");
 
     drums.updateTrackProperties (hostTrack ("Drums"));
@@ -603,20 +619,11 @@ void testLinkedProcessing()
     for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
         drums.setLinkLevel (e, 0.0f);
 
-    for (auto* p : { &master, &guitar, &drums })
+    for (auto* p : { &guitar, &drums })
         p->prepareToPlay (48000.0, 512);
-    setParam (master, "amount", 1.0f);
-    setParam (master, "riserDepth", 0.0f);   // keeps the main's own output comparable
 
-    // ALL TRACKS: the main processes the mix; tracks stay out of it.
-    check (! master.appliesToSelectedTracks(), "the main applies to all tracks by default");
-    check (settledChange (guitar, 512, 20) == 0.0f, "on ALL TRACKS a linked track passes audio through untouched");
-    check (settledChange (master, 512, 40) > 0.05f, "on ALL TRACKS the main processes the whole mix");
-
-    // SELECTED TRACKS: tracks apply their effects; the main adds only the riser.
-    master.setAppliesToSelectedTracks (true);
-    check (master.getLinkHub().tracksActive(), "SELECTED TRACKS activates the linked tracks");
-    check (settledChange (master, 512, 40) == 0.0f, "on SELECTED TRACKS the main leaves high-pass, reverb and delay to the tracks");
+    // Linked: tracks apply their effects; the main adds only the riser.
+    check (settledChange (master, 512, 40) == 0.0f, "once tracks link, the main leaves high-pass, reverb and delay to them");
     check (settledChange (guitar, 512, 40) > 0.05f, "a track with its effects on follows the main's Amount");
     check (settledChange (drums, 512, 40) == 0.0f, "a track with every effect off is untouched");
 
@@ -655,8 +662,9 @@ void testLinkedProcessing()
              && approx (reloaded.getLinkLevel (Effect::delay), 0.0f, 1.0e-6f) && master.getLinkHub().getTracks().size() == 3,
            "a reloaded TRACK relinks with its levels");
 
-    // A second MAIN works on its own until the first one steps down.
+    // A second MAIN (chosen explicitly) works on its own until the first steps down.
     PreDropAudioProcessor second;
+    second.setRole (Role::main);
     check (! second.isLinkMain(), "a second MAIN does not take over the link");
     master.setRole (Role::track);
     check (pumpUntil ([&] { return second.isLinkMain(); }), "when the main steps down, another MAIN takes the link");
@@ -692,13 +700,8 @@ void testLinkingEditors()
     tracksButton->triggerClick();
     pumpMessages (40);
     check (matrix->isVisible() && ! findChild<BuildUpCurve> (*mainEditor)->isVisible(), "TRACKS opens the panel in the curve's place");
-    const auto allTracksView = render (*matrix);
-    check (hasDetail (render (*mainEditor)), "on ALL TRACKS the panel explains it covers the whole mix");
-
-    matrix->mouseDown (mouseAt (*matrix, matrix->scopeButton (true).getCentre(), false));
-    check (master.appliesToSelectedTracks(), "clicking SELECTED TRACKS switches the main to selected tracks");
     matrix->refresh();
-    check (pixelsChanged (allTracksView, render (*matrix)) > 500, "the panel then lists the linked tracks");
+    check (hasDetail (render (*matrix)), "the panel lists the linked tracks");
 
     click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
     check (guitar.getLinkLevel (Effect::reverb) == 0.0f && keys.getLinkLevel (Effect::reverb) == 1.0f,
@@ -745,11 +748,13 @@ void testLinkingEditors()
 
     // A second MAIN explains that another instance holds the link.
     PreDropAudioProcessor otherMain;
+    otherMain.setRole (Role::main);
     std::unique_ptr<juce::AudioProcessorEditor> otherEditor (otherMain.createEditor());
     if (auto* otherMatrix = findChild<TrackMatrix> (*otherEditor))
     {
-        otherMatrix->mouseDown (mouseAt (*otherMatrix, otherMatrix->scopeButton (true).getCentre(), false));
-        check (! otherMain.appliesToSelectedTracks() && hasDetail (render (*otherMatrix)),
+        otherMatrix->setBounds (matrix->getBounds());
+        click (*otherMatrix, otherMatrix->cell (1, Effect::reverb).getCentre());
+        check (guitar.getLinkLevel (Effect::reverb) == 1.0f && hasDetail (render (*otherMatrix)),
                "a MAIN that isn't the link shows why and ignores clicks");
     }
 
@@ -775,23 +780,22 @@ void testLinkingEditors()
            "a level changed from the main moves the TRACK's knob");
     check (hasDetail (render (*trackEditor)), "a TRACK renders its face");
 
-    // Switching the main's role from its pill swaps its face over.
-    roleButton->triggerClick();
-    pumpMessages (60);
-    check (master.getRole() == Role::track && roleButton->getButtonText() == "TRACK"
+    // Changing the role (the pill opens a native menu, chosen here directly)
+    // swaps the face over on the editor's next tick.
+    master.setRole (Role::track);
+    check (pumpUntil ([&] { return roleButton->getButtonText() == "TRACK"; })
              && findChild<TrackPanel> (*mainEditor)->isVisible() && ! tracksButton->isVisible(),
-           "the MAIN / TRACK pill switches the role and the face");
-    roleButton->triggerClick();
-    pumpMessages (60);
-    check (master.getRole() == Role::returnTrack && roleButton->getButtonText() == "RETURN"
+           "becoming a TRACK swaps to the track face");
+    master.setRole (Role::returnTrack);
+    check (pumpUntil ([&] { return roleButton->getButtonText() == "RETURN"; })
              && findChild<TrackPanel> (*mainEditor)->isVisible() && ! findChild<TrackPanel> (*mainEditor)->nameLabel().isVisible()
              && ! findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
-           "clicking again makes it a RETURN: the sends panel, and Mix locked to wet");
+           "becoming a RETURN shows the sends panel, with Mix locked to wet");
     check (hasDetail (render (*mainEditor)), "a RETURN renders its face");
-    roleButton->triggerClick();
-    pumpMessages (60);
-    check (master.getRole() == Role::main && tracksButton->isVisible() && findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
-           "and once more back to MAIN");
+    master.setRole (Role::main);
+    check (pumpUntil ([&] { return roleButton->getButtonText() == "MAIN"; })
+             && tracksButton->isVisible() && findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
+           "and back to MAIN");
 }
 
 void testReturnRole()
@@ -800,20 +804,20 @@ void testReturnRole()
     using Role = PreDropAudioProcessor::Role;
     using Effect = LinkHub::Effect;
 
-    PreDropAudioProcessor master, fx;
+    // With no main yet, a RETURN is silent.
+    PreDropAudioProcessor fx;
     fx.setRole (Role::returnTrack);
-    auto& hub = master.getLinkHub();
+    fx.prepareToPlay (48000.0, 512);
+    auto& hub = fx.getLinkHub();
     check (fx.followsMain() && hub.numReturns() == 1 && hub.getTracks().empty(),
            "a RETURN links as a return, not as a row in the track list");
+    check (settledOutputRms (fx, 512, 40) == 0.0f, "with no main a return is silent");
 
-    for (auto* p : { &master, &fx })
-        p->prepareToPlay (48000.0, 512);
+    PreDropAudioProcessor master;
+    check (master.isLinkMain() && hub.linkActive(), "a MAIN added later takes the link with the return on it");
+    master.prepareToPlay (48000.0, 512);
     setParam (master, "amount", 1.0f);
-
-    check (settledOutputRms (fx, 512, 40) == 0.0f, "on ALL TRACKS a return is silent (the main does the effects)");
-
-    master.setAppliesToSelectedTracks (true);
-    check (settledOutputRms (fx, 512, 60) > 0.01f, "on SELECTED TRACKS a return adds reverb and delay to what is sent");
+    check (settledOutputRms (fx, 512, 60) > 0.01f, "linked, a return adds reverb and delay to what is sent");
 
     // Wet only: the send itself never comes out of the return, even with Mix down.
     setParam (fx, "mix", 0.0f);
@@ -843,11 +847,11 @@ void testEmptyTrackList()
 {
     std::printf ("Empty track list:\n");
     PreDropAudioProcessor master;
-    master.setAppliesToSelectedTracks (true);
     TrackMatrix matrix (master);
     matrix.setBounds (0, 0, 308, 114);
     matrix.refresh();
-    check (hasDetail (render (matrix)), "with no linked tracks the panel says how to add one");
+    check (! master.getLinkHub().linkActive() && hasDetail (render (matrix)),
+           "with nothing linked the panel says the whole mix is processed, and how to pick tracks");
 }
 
 void testUnboundIndicators()

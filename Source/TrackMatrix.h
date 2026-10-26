@@ -12,9 +12,10 @@
 /**
     TrackMatrix: the main's TRACKS panel.
 
-    Top: the ALL TRACKS / SELECTED TRACKS switch (the main's "applies to").
-    With SELECTED TRACKS, one row per linked track with an HPF / REV / DLY
-    level each, plus a pinned ALL row that sets a column for every track.
+    Top: what the main is doing: the whole mix while nothing is linked, or
+    which TRACKs and RETURNs have taken over. Then one row per linked track
+    with an HPF / REV / DLY level each, plus a pinned ALL row that sets a
+    column for every track.
     A level is that track's share of the main's depth for the effect (100% =
     all of it, 0% = off): drag a cell up or down to set it, click to toggle
     between off and 100%, double-click to reset to 100%. The levels are the
@@ -44,11 +45,6 @@ public:
     }
 
     // --- Geometry (local coordinates), shared by painting, clicks and tests ---
-    juce::Rectangle<float> scopeButton (bool selectedTracks) const
-    {
-        auto bar = juce::Rectangle (pad(), pad(), (float) getWidth() - 2.0f * pad(), 16.0f * uiScale);
-        return selectedTracks ? bar.removeFromRight (bar.getWidth() * 0.5f) : bar.removeFromLeft (bar.getWidth() * 0.5f);
-    }
 
     /** Level cell for `effect` on a row: row 0 is ALL, rows 1.. are visible tracks. */
     juce::Rectangle<float> cell (int row, LinkHub::Effect effect) const
@@ -86,22 +82,17 @@ public:
             return;
         }
 
-        paintScopeSwitch (g);
-
-        if (! processor.appliesToSelectedTracks())
-        {
-            message ("Every effect applies to the whole mix.\nChoose SELECTED TRACKS to pick tracks.");
-            return;
-        }
-
         const auto tracks  = processor.getLinkHub().getTracks();
         const int  returns = processor.getLinkHub().numReturns();
+        paintStatus (g, (int) tracks.size(), returns);
+
         if (tracks.empty())
         {
             message (returns > 0
-                       ? juce::String (returns) + (returns == 1 ? " linked return" : " linked returns")
-                           + ": each track's send knob sets its amount.\nSet PreDrop to TRACK on a track for per-track levels."
-                       : juce::String ("No linked tracks yet. Add PreDrop to a track\nand switch it to TRACK (or RETURN on a return track)."));
+                       ? juce::String ("Each track's send knob sets how much reverb and delay it gets.\n"
+                                       "Add PreDrop to a track for per-track levels and high-pass.")
+                       : juce::String ("Everything applies to the whole mix. To pick tracks,\n"
+                                       "add PreDrop to them (it joins as TRACK) or to a return."));
             return;
         }
 
@@ -109,9 +100,7 @@ public:
         g.setFont (Fonts::sans (9.0f * s, true, 0.12f));
         g.setColour (Palette::textDimmer);
         const auto labelRow = juce::Rectangle (pad(), firstRowY() - 12.0f * s, (float) getWidth() - 2.0f * pad(), 11.0f * s);
-        g.drawText (returns > 0 ? "TRACK  + " + juce::String (returns) + (returns == 1 ? " RETURN" : " RETURNS")
-                                : juce::String ("TRACK"),
-                    labelRow, juce::Justification::centredLeft, false);
+        g.drawText ("TRACK", labelRow, juce::Justification::centredLeft, false);
         for (int e = 0; e < LinkHub::numEffects; ++e)
         {
             const auto c = cell (0, (LinkHub::Effect) e);
@@ -149,17 +138,6 @@ public:
         if (! processor.isLinkMain())
             return;
 
-        for (const bool selected : { false, true })
-            if (scopeButton (selected).contains (e.position))
-            {
-                processor.setAppliesToSelectedTracks (selected);
-                refresh();
-                return;
-            }
-
-        if (! processor.appliesToSelectedTracks())
-            return;
-
         // Remember which cell was grabbed and its level, for a drag or a click.
         const auto tracks = processor.getLinkHub().getTracks();
         if (const auto hit = cellAt (e.position, tracks); hit.row >= 0)
@@ -191,7 +169,7 @@ public:
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        if (! processor.isLinkMain() || ! processor.appliesToSelectedTracks())
+        if (! processor.isLinkMain())
             return;
         if (const auto hit = cellAt (e.position, processor.getLinkHub().getTracks()); hit.row >= 0)
             applyLevel (hit, 1.0f);
@@ -219,7 +197,7 @@ private:
 
     float pad() const noexcept       { return 8.0f * uiScale; }
     float rowH() const noexcept      { return 14.0f * uiScale; }
-    float firstRowY() const noexcept { return pad() + 16.0f * uiScale + 17.0f * uiScale; }
+    float firstRowY() const noexcept { return pad() + 11.0f * uiScale + 16.0f * uiScale; }   // status, labels
 
     int firstVisible (int numTracks) const noexcept
     {
@@ -280,24 +258,25 @@ private:
         return cyan;
     }
 
-    void paintScopeSwitch (juce::Graphics& g) const
+    // "WHOLE MIX" while nothing is linked, else what has linked.
+    void paintStatus (juce::Graphics& g, int tracks, int returns) const
     {
         using namespace PreDrop;
         const float s = uiScale;
-        const bool selected = processor.appliesToSelectedTracks();
-
-        for (const bool half : { false, true })
+        const auto line = juce::Rectangle (pad(), pad(), (float) getWidth() - 2.0f * pad(), 11.0f * s);
+        const auto count = [] (int n, const char* one, const char* many)
         {
-            const auto r = scopeButton (half).reduced (1.0f * s);
-            const bool on = half == selected;
-            g.setColour (on ? Palette::badge.withAlpha (0.28f) : juce::Colour::fromFloatRGBA (1.0f, 1.0f, 1.0f, 0.05f));
-            g.fillRoundedRectangle (r, 8.0f * s);
-            g.setColour (on ? Palette::badge : Palette::hairline);
-            g.drawRoundedRectangle (r, 8.0f * s, juce::jmax (1.0f, s));
-            g.setFont (Fonts::sans (9.5f * s, true, 0.12f));
-            g.setColour (on ? Palette::textStrong : Palette::textDim);
-            g.drawText (half ? "SELECTED TRACKS" : "ALL TRACKS", r, juce::Justification::centred, false);
-        }
+            return juce::String (n) + " " + (n == 1 ? one : many);
+        };
+
+        juce::String text ("WHOLE MIX");
+        if (tracks > 0 && returns > 0) text = "LINKED: " + count (tracks, "TRACK", "TRACKS") + " + " + count (returns, "RETURN", "RETURNS");
+        else if (tracks > 0)           text = "LINKED: " + count (tracks, "TRACK", "TRACKS");
+        else if (returns > 0)          text = "LINKED: " + count (returns, "RETURN", "RETURNS");
+
+        g.setFont (Fonts::sans (9.5f * s, true, 0.12f));
+        g.setColour (tracks + returns > 0 ? Palette::cyan : Palette::textDim);
+        g.drawText (text, line, juce::Justification::centredLeft, false);
     }
 
     // One row: the name, then a level bar per effect, filled to the level in
@@ -344,8 +323,7 @@ private:
     juce::String describe() const
     {
         juce::String d;
-        d << (processor.isLinkMain() ? "M" : "-") << (processor.appliesToSelectedTracks() ? "S" : "A") << scroll
-          << "R" << processor.getLinkHub().numReturns() << "|";
+        d << (processor.isLinkMain() ? "M" : "-") << scroll << "R" << processor.getLinkHub().numReturns() << "|";
         for (auto* t : processor.getLinkHub().getTracks())
         {
             d << t->getLinkName() << ":";
