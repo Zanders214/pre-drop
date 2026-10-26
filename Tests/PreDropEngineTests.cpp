@@ -13,6 +13,7 @@
 #include <cmath>
 #include <array>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -607,6 +608,87 @@ void testWetOnly()
                                                  + std::to_string (worst) + ")");
 }
 
+// ---- Test 3h: external reverb / delay (hosted plugins) at the calibrated level.
+// A stand-in "plugin" whose wet output is its input, so the expected output is
+// exact: dry + level x dry.
+struct PassThroughEffect : PreDropEngine::ExternalEffect
+{
+    int calls = 0;
+    void process (float* const*, int, int) noexcept override { ++calls; }
+};
+
+void testExternalEffects()
+{
+    std::printf ("External effects:\n");
+
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+
+    // Largest |out - factor x in| over the settled final block.
+    const auto deviation = [&] (PreDropEngine& engine, float factor)
+    {
+        float worst = 0.0f;
+        for (int b = 0; b < 40; ++b)
+        {
+            const auto in = makeSine (sr, 220.0, block);
+            auto out = in;
+            engine.process (out);
+            if (b == 39)
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int n = 0; n < block; ++n)
+                        worst = std::max (worst, std::abs (out.getSample (ch, n) - factor * in.getSample (ch, n)));
+        }
+        return worst;
+    };
+
+    const auto makeEngine = [&] (float amount, bool wetOnly)
+    {
+        auto engine = std::make_unique<PreDropEngine>();
+        engine->setHpfDepth (0.0f);
+        engine->setRiserDepth (0.0f);
+        engine->setAmount (amount);
+        engine->setWetOnly (wetOnly);
+        engine->prepare (sr, 2, block);
+        return engine;
+    };
+
+    PassThroughEffect reverb, delay;
+
+    // External reverb only: the built-in reverb ramps out, the external one is
+    // summed at -6 dB (x0.5) at full Amount, default depth.
+    auto e1 = makeEngine (1.0f, false);
+    e1->setDelayDepth (0.0f);
+    e1->setExternalEffects (&reverb, nullptr);
+    check (deviation (*e1, 1.5f) < 1.0e-5f, "an external reverb replaces the built-in at the same level (dry + 0.5 x wet)");
+    check (reverb.calls > 0, "the external reverb is called every block");
+
+    auto e2 = makeEngine (0.5f, false);
+    e2->setDelayDepth (0.0f);
+    e2->setExternalEffects (&reverb, nullptr);
+    check (deviation (*e2, 1.25f) < 1.0e-5f, "it follows Amount: half the level at half the knob");
+
+    auto e3 = makeEngine (1.0f, false);
+    e3->setReverbDepth (0.0f);
+    e3->setExternalEffects (nullptr, &delay);
+    check (deviation (*e3, 1.5f) < 1.0e-5f, "an external delay replaces the built-in at the same level");
+
+    auto e4 = makeEngine (1.0f, false);
+    e4->setExternalEffects (&reverb, &delay);
+    check (deviation (*e4, 2.0f) < 1.0e-5f, "external reverb and delay together each add their share");
+
+    auto e5 = makeEngine (1.0f, true);
+    e5->setDelayDepth (0.0f);
+    e5->setExternalEffects (&reverb, nullptr);
+    check (deviation (*e5, 0.5f) < 1.0e-5f, "wet only (a return) outputs just the external effect");
+
+    auto e6 = makeEngine (1.0f, false);
+    e6->setDelayDepth (0.0f);
+    e6->setExternalEffects (&reverb, nullptr);
+    deviation (*e6, 1.5f);
+    e6->setExternalEffects (nullptr, nullptr);
+    check (deviation (*e6, 1.5f) > 1.0e-3f, "removing it hands back to the built-in reverb");
+}
+
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
 void testEmptyBlocks()
 {
@@ -668,6 +750,7 @@ int main()
     testIdleEffectsPassThrough();
     testHpfIdleTransitionsAreSmooth();
     testWetOnly();
+    testExternalEffects();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 

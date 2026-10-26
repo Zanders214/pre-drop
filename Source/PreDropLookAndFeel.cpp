@@ -272,7 +272,10 @@ void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& bu
     const float xL   = area.getCentreX() - (dot + gap + tw) * 0.5f;
     const float cy   = area.getCentreY();
 
-    const juce::Colour dotCol  = on ? juce::Colours::white : Palette::textStrong;
+    // A caption colour set on the button (a warning, say) overrides the default.
+    const juce::Colour idleText = button.isColourSpecified (juce::TextButton::textColourOffId)
+                                      ? button.findColour (juce::TextButton::textColourOffId) : Palette::textStrong;
+    const juce::Colour dotCol  = on ? juce::Colours::white : idleText;
     const juce::Colour glowCol = on ? juce::Colours::white : Palette::badge;
 
     const juce::Rectangle dotRect (xL, cy - dot * 0.5f, dot, dot);
@@ -284,7 +287,7 @@ void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& bu
     g.fillRoundedRectangle (dotRect, 1.5f * s);
 
     g.setFont (font);
-    g.setColour (on ? juce::Colours::white : Palette::textStrong);
+    g.setColour (on ? juce::Colours::white : idleText);
     g.drawText (text, juce::Rectangle<float> (xL + dot + gap, area.getY(), tw + 2.0f * s, area.getHeight()),
                 juce::Justification::centredLeft, false);
 }

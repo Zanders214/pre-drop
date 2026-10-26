@@ -24,6 +24,10 @@ namespace
     // State property holding a track name typed into PreDrop.
     const juce::Identifier trackNameTag { "trackName" };
 
+    // Child of the saved state with the reverb / delay plug-ins, one SLOT each.
+    const juce::Identifier effectPluginsTag { "EFFECT_PLUGINS" };
+    const juce::Identifier effectSlotTag    { "SLOT" };
+
     // The main's controls that linked tracks follow.
     constexpr std::array<const char*, 4> linkedParameters { ParamID::amount, ParamID::hpfDepth, ParamID::reverbDepth,
                                                             ParamID::delayDepth };
@@ -51,6 +55,7 @@ PreDropAudioProcessor::PreDropAudioProcessor()
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
     formats.registerBasicFormats();
+    effectPlugins.formats.addFormat (new juce::VST3PluginFormat());
 
     // Publish the main's controls the moment they change (from the UI, the
     // host's automation, or a state load), not only when it next processes.
@@ -73,6 +78,7 @@ PreDropAudioProcessor::PreDropAudioProcessor()
 PreDropAudioProcessor::~PreDropAudioProcessor()
 {
     stopTimer();
+    closeEffectPluginWindows();   // their editors go before their plug-ins
     for (auto* id : linkedParameters)
         apvts.removeParameterListener (id, this);
     if (link.registered)
@@ -150,6 +156,18 @@ void PreDropAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     currentSampleRate = sampleRate;
     sendRiserToEngine();
     engine.prepare (sampleRate, getTotalNumOutputChannels(), samplesPerBlock);
+
+    // Prepare the effect plug-ins for this rate: the one the audio thread will
+    // run and, if a newer one is still waiting to be picked up, that one too.
+    const juce::ScopedLock lock (effectPlugins.lock);
+    effectPlugins.blockSize = samplesPerBlock;
+    for (auto& slot : effectPlugins.slots)
+    {
+        auto* running = slot.handoff.acquire();
+        for (auto* fx : { running, slot.latest })
+            if (fx != nullptr && ! fx->isEmpty())
+                fx->prepare (sampleRate, samplesPerBlock);
+    }
 }
 
 void PreDropAudioProcessor::releaseResources()
@@ -224,6 +242,14 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         engine.setRiserDepth  (param (ParamID::riserDepth));
     }
 
+    // A loaded reverb / delay plug-in takes over from the built-in one.
+    const auto external = [] (RtHandoff<HostedEffect>& handoff) -> PreDropEngine::ExternalEffect*
+    {
+        auto* fx = handoff.acquire();
+        return fx != nullptr && ! fx->isEmpty() ? fx : nullptr;
+    };
+    engine.setExternalEffects (external (effectPlugins.slots[0].handoff), external (effectPlugins.slots[1].handoff));
+
     engine.process (buffer);
 }
 
@@ -261,6 +287,34 @@ void PreDropAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         state.appendChild (sample, nullptr);
     }
 
+    // Each loaded plug-in: which one it is and its own settings. A missing one
+    // is written back as it was loaded, so a re-save doesn't lose it.
+    {
+        const juce::ScopedLock pluginLock (effectPlugins.lock);
+        juce::ValueTree plugins (effectPluginsTag);
+        for (int i = 0; i < (int) effectPlugins.slots.size(); ++i)
+        {
+            const auto& slot = effectPlugins.slots[(size_t) i];
+            if (slot.latest != nullptr && ! slot.latest->isEmpty())
+            {
+                juce::ValueTree saved (effectSlotTag);
+                saved.setProperty ("index", i, nullptr);
+                if (auto xml = slot.latest->getDescription().createXml())
+                    saved.setProperty ("description", xml->toString (juce::XmlElement::TextFormat().singleLine()), nullptr);
+                juce::MemoryBlock pluginState;
+                slot.latest->getPlugin()->getStateInformation (pluginState);
+                saved.setProperty ("state", pluginState.toBase64Encoding(), nullptr);
+                plugins.appendChild (saved, nullptr);
+            }
+            else if (slot.missing.isValid())
+            {
+                plugins.appendChild (slot.missing.createCopy(), nullptr);
+            }
+        }
+        if (plugins.getNumChildren() > 0)
+            state.appendChild (plugins, nullptr);
+    }
+
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -273,9 +327,20 @@ void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInByt
 
     auto state = juce::ValueTree::fromXml (*xml);
     const auto sample = state.getChildWithName (riserStateTag);
+    const auto plugins = state.getChildWithName (effectPluginsTag);
     state.removeChild (sample, nullptr);
+    state.removeChild (plugins, nullptr);
     apvts.replaceState (state);
     updateLink();   // the restored role may differ
+
+    for (int i = 0; i < (int) effectPlugins.slots.size(); ++i)
+    {
+        const auto saved = plugins.getChildWithProperty ("index", i);
+        if (saved.isValid())
+            restoreEffectPlugin ((EffectSlot) i, saved);
+        else
+            useBuiltInEffect ((EffectSlot) i);
+    }
 
     juce::MemoryBlock fileData;
     if (sample.isValid() && fileData.fromBase64Encoding (sample["data"].toString())
@@ -365,6 +430,8 @@ void PreDropAudioProcessor::sendRiserToEngine()
 void PreDropAudioProcessor::timerCallback()
 {
     engine.collectRetiredRiserSamples();
+    for (auto& slot : effectPlugins.slots)
+        slot.handoff.collect();
     updateLink();
 }
 
@@ -468,4 +535,184 @@ void PreDropAudioProcessor::updateTrackProperties (const TrackProperties& proper
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new PreDropAudioProcessor();   // NOSONAR(cpp:S5025): JUCE's plugin entry point returns an owning raw pointer
+}
+
+// --- Effect plug-ins -------------------------------------------------------------
+
+juce::String PreDropAudioProcessor::loadEffectPlugin (EffectSlot slot, const juce::File& plugin)
+{
+    if (! plugin.exists())
+        return "\"" + plugin.getFileName() + "\" could not be found.";
+
+    juce::OwnedArray<juce::PluginDescription> types;
+    for (auto* format : effectPlugins.formats.getFormats())
+        if (format->fileMightContainThisPluginType (plugin.getFullPathName()))
+            format->findAllTypesForFile (types, plugin.getFullPathName());
+
+    if (types.isEmpty())
+        return "\"" + plugin.getFileName() + "\" couldn't be read as a VST3 plug-in.";
+
+    for (const auto* type : types)
+        if (! type->isInstrument)
+            return installEffectPlugin (slot, *type, nullptr);
+
+    return "\"" + types[0]->name + "\" is an instrument; choose an effect.";
+}
+
+juce::String PreDropAudioProcessor::installEffectPlugin (EffectSlot slot, const juce::PluginDescription& description,
+                                                         const juce::MemoryBlock* pluginState)
+{
+    const double rate = currentSampleRate.load() > 0.0 ? currentSampleRate.load() : 44100.0;
+    juce::String error;
+    auto instance = effectPlugins.formats.createPluginInstance (description, rate, effectPlugins.blockSize, error);
+    if (instance == nullptr)
+        return "\"" + description.name + "\" couldn't be opened" + (error.isNotEmpty() ? ": " + error : juce::String ("."));
+
+    // Stereo in and out, where the plug-in allows it (set before preparing).
+    juce::AudioProcessor::BusesLayout stereo;
+    stereo.inputBuses.add (juce::AudioChannelSet::stereo());
+    stereo.outputBuses.add (juce::AudioChannelSet::stereo());
+    if (instance->checkBusesLayoutSupported (stereo))
+        instance->setBusesLayout (stereo);
+
+    if (pluginState != nullptr && pluginState->getSize() > 0)
+        instance->setStateInformation (pluginState->getData(), (int) pluginState->getSize());
+
+    auto effect = std::make_unique<HostedEffect> (std::move (instance), description);
+
+    const juce::ScopedLock lock (effectPlugins.lock);
+    if (currentSampleRate.load() > 0.0)
+        effect->prepare (currentSampleRate.load(), effectPlugins.blockSize);   // ready before the audio thread sees it
+
+    auto& state = effectPlugins.slots[(size_t) slot];
+    state.window.reset();   // its editor belongs to the plug-in being replaced
+    state.latest  = effect.get();
+    state.name    = description.name;
+    state.missing = {};
+    state.handoff.send (std::move (effect));
+    return {};
+}
+
+void PreDropAudioProcessor::restoreEffectPlugin (EffectSlot slot, const juce::ValueTree& saved)
+{
+    juce::PluginDescription description;
+    if (auto xml = juce::parseXML (saved["description"].toString()); xml == nullptr || ! description.loadFromXml (*xml))
+    {
+        useBuiltInEffect (slot);
+        return;
+    }
+
+    // Where it was saved, or a plug-in of the same name in this computer's folders.
+    if (! juce::File::isAbsolutePath (description.fileOrIdentifier) || ! juce::File (description.fileOrIdentifier).exists())
+    {
+        const auto fileName = juce::File::createFileWithoutCheckingPath (description.fileOrIdentifier).getFileName();
+        for (const auto& candidate : findInstalledVst3Plugins())
+            if (candidate.getFileName() == fileName)
+                description.fileOrIdentifier = candidate.getFullPathName();
+    }
+
+    juce::MemoryBlock pluginState;
+    pluginState.fromBase64Encoding (saved["state"].toString());
+
+    if (! juce::File::isAbsolutePath (description.fileOrIdentifier)
+        || ! juce::File (description.fileOrIdentifier).exists()
+        || installEffectPlugin (slot, description, &pluginState).isNotEmpty())
+    {
+        useBuiltInEffect (slot);
+        const juce::ScopedLock lock (effectPlugins.lock);
+        effectPlugins.slots[(size_t) slot].missing = saved.createCopy();
+    }
+}
+
+void PreDropAudioProcessor::useBuiltInEffect (EffectSlot slot)
+{
+    auto none = std::make_unique<HostedEffect>();
+
+    const juce::ScopedLock lock (effectPlugins.lock);
+    auto& state = effectPlugins.slots[(size_t) slot];
+    state.window.reset();
+    state.latest  = none.get();
+    state.name    = {};
+    state.missing = {};
+    state.handoff.send (std::move (none));
+}
+
+juce::String PreDropAudioProcessor::getEffectPluginName (EffectSlot slot) const
+{
+    const juce::ScopedLock lock (effectPlugins.lock);
+    return effectPlugins.slots[(size_t) slot].name;
+}
+
+juce::String PreDropAudioProcessor::getMissingEffectPluginName (EffectSlot slot) const
+{
+    const juce::ScopedLock lock (effectPlugins.lock);
+    const auto& missing = effectPlugins.slots[(size_t) slot].missing;
+    if (! missing.isValid())
+        return {};
+
+    juce::PluginDescription description;
+    if (auto xml = juce::parseXML (missing["description"].toString()); xml != nullptr && description.loadFromXml (*xml))
+        return description.name;
+    return "a plug-in";
+}
+
+bool PreDropAudioProcessor::effectPluginLeaksDry (EffectSlot slot) const
+{
+    const juce::ScopedLock lock (effectPlugins.lock);
+    const auto* fx = effectPlugins.slots[(size_t) slot].latest;
+    return fx != nullptr && ! fx->isEmpty() && fx->dryLeak() > HostedEffect::dryLeakWarning;
+}
+
+void PreDropAudioProcessor::showEffectPluginWindow (EffectSlot slot)
+{
+    auto& state = effectPlugins.slots[(size_t) slot];
+    if (state.latest == nullptr || state.latest->isEmpty())
+        return;
+
+    if (state.window == nullptr)
+    {
+        const juce::String title = state.name + (slot == EffectSlot::reverb ? " (PreDrop reverb)" : " (PreDrop delay)");
+        auto* owner = &state;
+        state.window = std::make_unique<EffectPluginWindow> (*state.latest->getPlugin(), title,
+                                                             [owner] { owner->window->setVisible (false); });
+    }
+
+    state.window->setVisible (true);
+    state.window->toFront (true);
+}
+
+void PreDropAudioProcessor::closeEffectPluginWindows()
+{
+    for (auto& slot : effectPlugins.slots)
+        slot.window.reset();
+}
+
+juce::Array<juce::File> PreDropAudioProcessor::findInstalledVst3Plugins()
+{
+    // The standard VST3 folders, and one level of vendor sub-folders in them.
+    // Only names are listed: nothing is loaded until one is chosen.
+    juce::Array<juce::File> found;
+    const auto add = [&found] (const juce::File& f)
+    {
+        if (f.hasFileExtension ("vst3") && ! f.getFileNameWithoutExtension().equalsIgnoreCase (JucePlugin_Name))
+            found.addIfNotAlreadyThere (f);
+    };
+
+    const auto folders = juce::VST3PluginFormat().getDefaultLocationsToSearch();
+    for (int i = 0; i < folders.getNumPaths(); ++i)
+        for (const auto& entry : juce::RangedDirectoryIterator (folders[i], false, "*", juce::File::findFilesAndDirectories))
+        {
+            const auto f = entry.getFile();
+            if (f.hasFileExtension ("vst3"))
+                add (f);
+            else if (f.isDirectory())
+                for (const auto& inner : juce::RangedDirectoryIterator (f, false, "*.vst3", juce::File::findFilesAndDirectories))
+                    add (inner.getFile());
+        }
+
+    std::sort (found.begin(), found.end(), [] (const juce::File& a, const juce::File& b)
+    {
+        return a.getFileNameWithoutExtension().compareIgnoreCase (b.getFileNameWithoutExtension()) < 0;
+    });
+    return found;
 }

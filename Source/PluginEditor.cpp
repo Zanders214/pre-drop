@@ -39,6 +39,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     : AudioProcessorEditor (&p),
       processorRef (p),
       buildUpCurve (p.getState(), "amount"),
+      slotButtons (p, lnf),
       link (p)
 {
     // --- Amount knob ---------------------------------------------------------
@@ -118,6 +119,8 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 
     addChildComponent (link.matrix);
     addChildComponent (link.panel);
+    addChildComponent (slotButtons.reverb);   // shown with the EFFECTS panel
+    addChildComponent (slotButtons.delay);
 
     // --- Indicators (a TRACK shows what the main is driving it with) ----------
     effectChips.setAmountSource ([this] { return displayedAmount(); });
@@ -157,6 +160,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
 {
     stopTimer();
+    processorRef.closeEffectPluginWindows();   // plug-in windows close with PreDrop's
     amountSlider.setLookAndFeel (nullptr);
     mixSlider.setLookAndFeel (nullptr);
     trimSlider.setLookAndFeel (nullptr);
@@ -178,6 +182,8 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
     buildUpCurve.setVisible (main && reveal == Reveal::curve);
     for (auto& sl : depthSliders)
         sl.setVisible (main && reveal == Reveal::effects);
+    slotButtons.reverb.setVisible (main && reveal == Reveal::effects);
+    slotButtons.delay.setVisible (main && reveal == Reveal::effects);
     link.matrix.setVisible (main && reveal == Reveal::tracks);
 
     effectsButton.setToggleState (reveal == Reveal::effects, juce::dontSendNotification);
@@ -412,6 +418,11 @@ void PreDropAudioProcessorEditor::timerCallback()
         link.matrix.refresh();
     if (link.panel.isVisible())
         link.panel.refresh();
+    if (slotButtons.reverb.isVisible())
+    {
+        slotButtons.reverb.refresh();
+        slotButtons.delay.refresh();
+    }
 
     const float a = displayedAmount();
     if (isTrackMode() && std::abs ((float) amountSlider.getValue() - a) > 1.0e-4f)
@@ -615,9 +626,17 @@ void PreDropAudioProcessorEditor::resized()
     link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
 
     // Lay out the four depth dials across the reveal slot (used when open): each
-    // column is an arc on top with its name + value stacked beneath it.
+    // column is an arc on top with its name + value stacked beneath it, and the
+    // REV / DLY plug-in slots share a row along the bottom.
     {
         auto knobs = layout.reveal.reduced (px (8.0f), px (8.0f));
+        auto slotRow = knobs.removeFromBottom (px (16.0f));
+        knobs.removeFromBottom (px (4.0f));
+        const int slotGap = px (8.0f);
+        slotButtons.reverb.setBounds (slotRow.removeFromLeft ((slotRow.getWidth() - slotGap) / 2));
+        slotRow.removeFromLeft (slotGap);
+        slotButtons.delay.setBounds (slotRow);
+
         const int kGap      = px (10.0f);
         const int colW      = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
         const int textBlock = px (26.0f);                  // name + value lines

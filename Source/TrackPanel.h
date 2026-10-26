@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "EffectSlotButton.h"
 #include "PluginProcessor.h"
 #include "PreDropLookAndFeel.h"
 #include "PreDropTheme.h"
@@ -24,8 +25,14 @@
 class TrackPanel : public juce::Component
 {
 public:
-    explicit TrackPanel (PreDropAudioProcessor& p) : processor (p)
+    explicit TrackPanel (PreDropAudioProcessor& p)
+        : processor (p),
+          reverbSlot (p, PreDropAudioProcessor::EffectSlot::reverb, pillLookAndFeel),
+          delaySlot  (p, PreDropAudioProcessor::EffectSlot::delay,  pillLookAndFeel)
     {
+        addAndMakeVisible (reverbSlot);
+        addAndMakeVisible (delaySlot);
+
         name.setEditable (false, true, false);   // double-click to rename
         name.setJustificationType (juce::Justification::centredLeft);
         name.setColour (juce::Label::textColourId, PreDrop::Palette::textStrong);
@@ -68,6 +75,7 @@ public:
     {
         uiScale = juce::jmax (0.1f, s);
         knobLookAndFeel.setUiScale (uiScale);
+        pillLookAndFeel.setUiScale (uiScale);
     }
 
     /** Updates the status and name. Called from the editor's timer. */
@@ -75,6 +83,8 @@ public:
     {
         if (! name.isBeingEdited() && name.getText() != processor.getTrackName())
             name.setText (processor.getTrackName(), juce::dontSendNotification);
+        reverbSlot.refresh();
+        delaySlot.refresh();
 
         if (const auto status = statusLines().first; status != shownStatus)
         {
@@ -153,9 +163,16 @@ public:
         nameCaption = nameRow.removeFromLeft (px (80.0f));
         name.setBounds (nameRow);
 
-        // Three columns, each a small knob with its label and level beside it.
+        // Three columns, each a small knob with its label and level beside it,
+        // then the REV / DLY plug-in slots.
         area.removeFromTop (px (8.0f));
-        auto row = area.removeFromTop (px (40.0f));
+        auto row = area.removeFromTop (px (36.0f));
+        area.removeFromTop (px (4.0f));
+        auto slotRow = area.removeFromTop (px (16.0f));
+        const int slotGap = px (8.0f);
+        reverbSlot.setBounds (slotRow.removeFromLeft ((slotRow.getWidth() - slotGap) / 2));
+        slotRow.removeFromLeft (slotGap);
+        delaySlot.setBounds (slotRow);
         const int colW = row.getWidth() / 3;
         for (size_t i = 0; i < levels.size(); ++i)
         {
@@ -188,6 +205,9 @@ private:
 
     PreDropAudioProcessor& processor;
     DepthKnobLookAndFeel   knobLookAndFeel;
+    PreDropLookAndFeel     pillLookAndFeel;
+    EffectSlotButton       reverbSlot;
+    EffectSlotButton       delaySlot;
     juce::Label name;
     std::array<juce::Slider, 3> levels;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 3> attachments;

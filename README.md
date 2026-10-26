@@ -56,6 +56,24 @@ no main passes its audio through untouched, and a RETURN with no main is silent.
 (Linking works because hosts like Ableton Live run every plugin instance in one
 process.)
 
+## Your own reverb and delay
+
+Open **EFFECTS**: below the depth knobs, the **REV** and **DLY** pills choose what
+PreDrop uses as its reverb and its delay: **Built-in** (default), any **VST3 effect**
+from your plug-in folders, or one you browse to. Pick one and its window opens so you
+can shape its sound (reopen it from the pill's menu). Set it to **100% wet**: PreDrop
+feeds it the high-passed signal and brings its output in at the same calibrated level
+as the built-in effect, so Amount, the depth knobs and per-track levels all keep
+working (the pill turns amber and says *SET 100% WET* if it hears the dry signal
+coming through). The plug-in and its settings are saved with your set; on a computer
+where it isn't installed, the built-in effect plays and the pill says *MISSING*, and
+its settings are kept for when it is. TRACKs and RETURNs have the same pills.
+
+With the built-in effects, Amount also grows the room and the delay feedback; with
+your own plug-in it sets the level, while the plug-in's own knobs set its sound. A
+plug-in that reports latency adds that much pre-delay to its effect (reverbs and
+delays rarely have any).
+
 ## Controls
 
 | Knob        | What it does                                                        |
@@ -66,6 +84,7 @@ process.)
 | **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
 | **Riser**   | The riser sound. Built-in noise by default; click **RISER** (or drop a WAV / AIFF / FLAC anywhere on the plugin) to use your own sample instead, and pick *Use built-in noise* to go back. |
+| **REV / DLY** | In the EFFECTS panel (and on TRACK / RETURN): the built-in reverb / delay, or one of your VST3 effects. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
@@ -108,6 +127,9 @@ Source/
   PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
   PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
   RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
+  RtHandoff.h                lock-free hand-over of objects to the audio thread
+  HostedEffect.h             a VST3 effect standing in for the reverb / delay, and its window
+  EffectSlotButton.h         the REV / DLY pill: built-in or a VST3, its menu and warnings
   LinkHub.h                  process-wide link between the MAIN and its TRACK / RETURN instances
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
   TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels

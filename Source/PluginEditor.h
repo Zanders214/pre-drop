@@ -7,6 +7,7 @@
 #include "PreDropLookAndFeel.h"
 #include "EffectChips.h"
 #include "BuildUpCurve.h"
+#include "EffectSlotButton.h"
 #include "TrackMatrix.h"
 #include "TrackPanel.h"
 
@@ -120,6 +121,18 @@ private:
         bool                               dragActive = false;
     };
     RiserControl riserUi;
+
+    // The REV / DLY plug-in slot pills along the bottom of the EFFECTS panel.
+    struct SlotButtons
+    {
+        SlotButtons (PreDropAudioProcessor& p, juce::LookAndFeel& pills)
+            : reverb (p, PreDropAudioProcessor::EffectSlot::reverb, pills),
+              delay  (p, PreDropAudioProcessor::EffectSlot::delay,  pills) {}
+
+        EffectSlotButton reverb;
+        EffectSlotButton delay;
+    };
+    SlotButtons slotButtons;
 
     // The MAIN / TRACK pill, the main's TRACKS button and panel, and the panel
     // a TRACK shows instead.
