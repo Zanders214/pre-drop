@@ -105,7 +105,7 @@ public:
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 12.0f * s);
 
         const auto [title, detail] = statusLines();
-        const bool linked = processor.getLinkHub().tracksActive();
+        const bool linked = processor.getLinkHub().linkActive();
         auto area = getLocalBounds().toFloat().reduced (12.0f * s, 10.0f * s);
 
         g.setFont (Fonts::sans (10.0f * s, true, 0.12f));
@@ -179,10 +179,8 @@ private:
     std::pair<juce::String, juce::String> statusLines() const
     {
         const auto& hub = processor.getLinkHub();
-        if (! hub.hasMain())
-            return { "NOT LINKED", "Add PreDrop to your master as MAIN, set to SELECTED TRACKS." };
-        if (! hub.tracksActive())
-            return { "WAITING FOR THE MAIN", "The main applies to ALL TRACKS; set it to SELECTED TRACKS." };
+        if (! hub.linkActive())
+            return { "NOT LINKED", "Add PreDrop to your master (it becomes the MAIN) to link up." };
         if (returnMode)
             return { "LINKED AS A RETURN", "Adds reverb and delay, wet only, to what tracks send here." };
         return { "LINKED TO THE MAIN", "Levels below are this track's share of the main's depths." };

@@ -15,8 +15,9 @@
     master drive PreDrops on individual tracks:
 
       - The *main* (the first instance set to MAIN that claims the slot)
-        publishes its Amount and effect depths, and whether it applies to
-        selected tracks only.
+        publishes its Amount and effect depths. While nothing is linked it
+        works on the whole mix; as soon as a TRACK or RETURN links, those
+        take over the high-pass, reverb and delay and the main keeps the riser.
       - *Tracks* (instances set to TRACK) register so the main's editor can list
         them and set how much of each effect they get.
       - *Returns* (instances set to RETURN, on a send / return track) register
@@ -52,7 +53,6 @@ public:
     {
         std::atomic<float> amount { 0.0f };
         std::array<std::atomic<float>, numEffects> depths { 0.5f, 0.5f, 0.5f };
-        std::atomic<bool>  selectedTracksOnly { false };
     };
 
     // --- The main slot ------------------------------------------------------
@@ -68,8 +68,7 @@ public:
     void releaseMain (const void* owner) noexcept
     {
         const void* expected = owner;
-        if (mainOwner.compare_exchange_strong (expected, nullptr))
-            main.selectedTracksOnly.store (false);
+        mainOwner.compare_exchange_strong (expected, nullptr);
     }
 
     bool isMain (const void* owner) const noexcept { return owner != nullptr && mainOwner.load() == owner; }
@@ -78,9 +77,10 @@ public:
     MainState&       mainState() noexcept       { return main; }
     const MainState& mainState() const noexcept { return main; }
 
-    /** True when tracks should process: a main exists and it is set to
-        selected tracks. Safe on the audio thread. */
-    bool tracksActive() const noexcept { return hasMain() && main.selectedTracksOnly.load(); }
+    /** True when the link is in use: a main exists and at least one TRACK or
+        RETURN is linked to it. Then the followers apply the high-pass, reverb
+        and delay and the main leaves them out. Safe on the audio thread. */
+    bool linkActive() const noexcept { return hasMain() && numFollowers.load() > 0; }
 
     // --- Linked tracks (message thread) -------------------------------------
     void addTrack (LinkedTrack* track)
@@ -88,12 +88,14 @@ public:
         const juce::ScopedLock lock (tracksLock);
         if (std::find (tracks.begin(), tracks.end(), track) == tracks.end())
             tracks.push_back (track);
+        countFollowers();
     }
 
     void removeTrack (LinkedTrack* track)
     {
         const juce::ScopedLock lock (tracksLock);
         tracks.erase (std::remove (tracks.begin(), tracks.end(), track), tracks.end());
+        countFollowers();
     }
 
     /** The linked tracks in the order they linked. */
@@ -109,12 +111,14 @@ public:
         const juce::ScopedLock lock (tracksLock);
         if (std::find (returns.begin(), returns.end(), owner) == returns.end())
             returns.push_back (owner);
+        countFollowers();
     }
 
     void removeReturn (const void* owner)
     {
         const juce::ScopedLock lock (tracksLock);
         returns.erase (std::remove (returns.begin(), returns.end(), owner), returns.end());
+        countFollowers();
     }
 
     int numReturns() const
@@ -132,7 +136,11 @@ public:
     }
 
 private:
+    // Called with tracksLock held: mirrors the list sizes for the audio threads.
+    void countFollowers() noexcept { numFollowers.store ((int) (tracks.size() + returns.size())); }
+
     std::atomic<const void*> mainOwner { nullptr };
+    std::atomic<int>         numFollowers { 0 };
     MainState main;
 
     juce::CriticalSection tracksLock;

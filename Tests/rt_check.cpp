@@ -21,7 +21,8 @@ int main()
     proc.prepareToPlay (sr, bs);
 
     // A second instance linked as a TRACK, so the linked path (reading the
-    // main's published controls, applying the track's effects) runs too.
+    // main's published controls, applying the track's effects) runs too; the
+    // main then hands its high-pass, reverb and delay to it.
     PreDropAudioProcessor track;
     track.setRole (PreDropAudioProcessor::Role::track);
     track.prepareToPlay (sr, bs);
@@ -64,7 +65,6 @@ int main()
     {
         if (b == blocks / 2)
         {
-            proc.setAppliesToSelectedTracks (true);   // hand HPF / reverb / delay to the track
             const auto error = proc.loadRiserSample (riserFile);
             if (error.isNotEmpty())
             {

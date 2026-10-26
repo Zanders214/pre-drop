@@ -11,7 +11,6 @@ namespace ParamID
     static constexpr const char* riserDepth  = "riserDepth";
     static constexpr const char* hpfDepth    = "hpfDepth";
     static constexpr const char* role        = "role";
-    static constexpr const char* scope       = "scope";
     static constexpr const char* trackHpf    = "trackHpf";
     static constexpr const char* trackReverb = "trackReverb";
     static constexpr const char* trackDelay  = "trackDelay";
@@ -26,8 +25,8 @@ namespace
     const juce::Identifier trackNameTag { "trackName" };
 
     // The main's controls that linked tracks follow.
-    constexpr std::array<const char*, 5> linkedParameters { ParamID::amount, ParamID::hpfDepth, ParamID::reverbDepth,
-                                                            ParamID::delayDepth, ParamID::scope };
+    constexpr std::array<const char*, 4> linkedParameters { ParamID::amount, ParamID::hpfDepth, ParamID::reverbDepth,
+                                                            ParamID::delayDepth };
 
     // Parameter holding whether a linked track applies `effect`.
     const char* trackEffect (LinkHub::Effect effect)
@@ -57,6 +56,15 @@ PreDropAudioProcessor::PreDropAudioProcessor()
     // host's automation, or a state load), not only when it next processes.
     for (auto* id : linkedParameters)
         apvts.addParameterListener (id, this);
+
+    // Added to a set that already has a main: join it as a TRACK, so dropping
+    // PreDrop on a track is all it takes. A saved role still wins, since the
+    // host restores the state right after construction.
+    if (linkHub->hasMain())
+    {
+        auto* role = apvts.getParameter (ParamID::role);
+        role->setValueNotifyingHost (role->convertTo0to1 ((float) (int) Role::track));
+    }
 
     updateLink();
     startTimerHz (10);   // keeps the link current; frees swapped-out riser samples
@@ -113,14 +121,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
     addDepth (ParamID::riserDepth,  "Riser");
     addDepth (ParamID::hpfDepth,    "High-Pass");
 
-    // Linking. Role and scope are set-up choices, not performance controls, so
-    // they are kept out of the host's automation lanes.
+    // Linking. The role is a set-up choice, not a performance control, so it is
+    // kept out of the host's automation lanes.
     layout.add (std::make_unique<AudioParameterChoice> (
         ParameterID { ParamID::role, 1 }, "Role", StringArray { "Main", "Track", "Return" }, 0,
-        AudioParameterChoiceAttributes().withAutomatable (false)));
-
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { ParamID::scope, 1 }, "Applies To", StringArray { "All tracks", "Selected tracks" }, 0,
         AudioParameterChoiceAttributes().withAutomatable (false)));
 
     // How much of each effect this instance gets while it is a linked TRACK:
@@ -189,11 +193,10 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     {
         // A linked TRACK or RETURN follows the main's Amount, and gets its own
         // share of the main's depth for each effect. The riser plays once, on
-        // the main. With no main, or the main applying to the whole mix,
-        // everything ramps to zero: a track passes its audio through, a return
-        // goes silent.
+        // the main. With no main, everything ramps to zero: a track passes its
+        // audio through, a return goes silent.
         const auto& main  = linkHub->mainState();
-        const bool active = linkHub->tracksActive();
+        const bool active = linkHub->linkActive();
         const auto depth  = [&] (LinkHub::Effect e)
         {
             return active ? main.depths[(size_t) e].load() * param (trackEffect (e)) : 0.0f;
@@ -207,10 +210,10 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     }
     else
     {
-        // The main applying to selected tracks leaves high-pass, reverb and
-        // delay to them and adds only the riser to the mix. Any other MAIN
-        // (or this one on ALL TRACKS) processes everything it receives.
-        const bool tracksDoTheRest = isLinkMain() && appliesToSelectedTracks();
+        // With tracks or returns linked, the main leaves high-pass, reverb and
+        // delay to them and adds only the riser to the mix. With nothing linked
+        // (or for any other MAIN) it processes everything it receives.
+        const bool tracksDoTheRest = isLinkMain() && linkHub->linkActive();
         if (isLinkMain())
             publishMainState();
 
@@ -379,18 +382,6 @@ void PreDropAudioProcessor::setRole (Role newRole)
     updateLink();
 }
 
-bool PreDropAudioProcessor::appliesToSelectedTracks() const noexcept
-{
-    return apvts.getRawParameterValue (ParamID::scope)->load() > 0.5f;
-}
-
-void PreDropAudioProcessor::setAppliesToSelectedTracks (bool selectedOnly)
-{
-    auto* p = apvts.getParameter (ParamID::scope);
-    p->setValueNotifyingHost (p->convertTo0to1 (selectedOnly ? 1.0f : 0.0f));
-    publishMainState();
-}
-
 void PreDropAudioProcessor::parameterChanged (const juce::String&, float)
 {
     publishMainState();   // atomic stores only: fine on whichever thread calls
@@ -433,7 +424,6 @@ void PreDropAudioProcessor::publishMainState() noexcept
     main.depths[(size_t) LinkHub::Effect::hpf].store    (param (ParamID::hpfDepth));
     main.depths[(size_t) LinkHub::Effect::reverb].store (param (ParamID::reverbDepth));
     main.depths[(size_t) LinkHub::Effect::delay].store  (param (ParamID::delayDepth));
-    main.selectedTracksOnly.store (appliesToSelectedTracks());
 }
 
 juce::String PreDropAudioProcessor::getTrackName() const
