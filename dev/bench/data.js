@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793042800670,
+  "lastUpdate": 1793044508764,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -373,6 +373,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.345,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98092afb75b45217f085e47e417265f626dbaae1",
+          "message": "Merge pull request #15 from Zanders214/claude/simpler-linking\n\nSimpler linking: automatic hand-off, auto-TRACK, role menu",
+          "timestamp": "2026-10-26T20:53:56+01:00",
+          "tree_id": "7c88badc8372f60a460729f893076cba3258369d",
+          "url": "https://github.com/Zanders214/pre-drop/commit/98092afb75b45217f085e47e417265f626dbaae1"
+        },
+        "date": 1793044508397,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 42592.991,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.399,
             "unit": "%"
           }
         ]
