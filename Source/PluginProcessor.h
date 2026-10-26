@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include "LinkHub.h"
 #include "PreDropEngine.h"
 
 /**
@@ -14,8 +15,16 @@
     It also owns the optional riser sample: the original file's bytes are kept
     and saved inside the plugin state, so a project carries its riser with it,
     and the decoded audio is rebuilt for the engine at the host's sample rate.
+
+    Linking: each instance is either MAIN (normally on the master) or TRACK.
+    The main's "applies to" switch picks ALL TRACKS (it processes the whole mix,
+    as a single PreDrop always has) or SELECTED TRACKS (it only adds the riser,
+    and every linked track applies the effects switched on for it, following
+    the main's Amount and depths). See LinkHub.
 */
 class PreDropAudioProcessor : public juce::AudioProcessor,
+                              public LinkHub::LinkedTrack,
+                              private juce::AudioProcessorValueTreeState::Listener,
                               private juce::Timer
 {
 public:
@@ -72,10 +81,36 @@ public:
 
     static constexpr double maxRiserSeconds = 60.0;
 
+    // --- Linking (message thread unless noted) -------------------------------
+    enum class Role { main = 0, track = 1 };
+
+    Role getRole() const noexcept;               // any thread
+    void setRole (Role newRole);
+    bool appliesToSelectedTracks() const noexcept;   // any thread
+    void setAppliesToSelectedTracks (bool selectedOnly);
+
+    /** True while this instance is the main that linked tracks follow. */
+    bool isLinkMain() const noexcept { return linkHub->isMain (this); }
+    LinkHub& getLinkHub() noexcept   { return *linkHub; }
+
+    /** This track's name in the main's list: the name typed into PreDrop, else
+        the host's track name, else "Track N". */
+    juce::String getTrackName() const;
+    void setTrackName (const juce::String& name);   // empty: back to the host's name
+
+    juce::String getLinkName() const override { return getTrackName(); }
+    bool isLinkEffectOn (LinkHub::Effect effect) const override;
+    void setLinkEffectOn (LinkHub::Effect effect, bool shouldBeOn) override;
+
+    void updateTrackProperties (const TrackProperties& properties) override;
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     void timerCallback() override;
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void updateLink();
+    void publishMainState() noexcept;
     juce::String loadRiserFromData (const juce::MemoryBlock& fileData, const juce::String& name);
     void sendRiserToEngine();
 
@@ -98,6 +133,19 @@ private:
         double                   sampleRate = 0.0;
     };
     RiserSource riser;
+
+    // One hub per process, shared by every PreDrop instance in it.
+    juce::SharedResourcePointer<LinkHub> linkHub;
+
+    // The host's name for this track (it may report it on any thread) and
+    // whether this instance is currently in the hub's track list.
+    struct LinkIdentity
+    {
+        juce::CriticalSection lock;
+        juce::String          hostName;
+        bool                  registered = false;
+    };
+    LinkIdentity link;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessor)
 };

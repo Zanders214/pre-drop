@@ -38,7 +38,8 @@ namespace
 PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor& p)
     : AudioProcessorEditor (&p),
       processorRef (p),
-      buildUpCurve (p.getState(), "amount")
+      buildUpCurve (p.getState(), "amount"),
+      link (p, lnf)
 {
     // --- Amount knob ---------------------------------------------------------
     amountSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -86,7 +87,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     effectsButton.setButtonText ("EFFECTS");
     effectsButton.setClickingTogglesState (true);
     effectsButton.setLookAndFeel (&lnf);
-    effectsButton.onClick = [this] { setDepthPanelOpen (effectsButton.getToggleState()); };
+    effectsButton.onClick = [this] { setReveal (effectsButton.getToggleState() ? Reveal::effects : Reveal::curve); };
     addAndMakeVisible (effectsButton);
 
     // The engaged pill's glow extends past the button, so let it paint outside
@@ -100,8 +101,32 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     addAndMakeVisible (riserUi.button);
     updateRiserButton();
 
-    // --- Indicators ----------------------------------------------------------
-    effectChips.setAmountSource ([this] { return paramValue (processorRef, "amount"); });
+    // --- Linking: TRACKS reveal toggle, MAIN / TRACK pill, the two panels -----
+    link.tracksButton.setButtonText ("TRACKS");
+    link.tracksButton.setClickingTogglesState (true);
+    link.tracksButton.setLookAndFeel (&lnf);
+    link.tracksButton.setPaintingIsUnclipped (true);
+    link.tracksButton.setTooltip ("Choose which linked tracks get the high-pass, reverb and delay.");
+    link.tracksButton.onClick = [this] { setReveal (link.tracksButton.getToggleState() ? Reveal::tracks : Reveal::curve); };
+    addAndMakeVisible (link.tracksButton);
+
+    link.roleButton.setLookAndFeel (&lnf);
+    link.roleButton.setPaintingIsUnclipped (true);
+    link.roleButton.setTooltip ("MAIN: put this on your master; it holds the Amount knob and the riser.\n"
+                                "TRACK: put this on a track; it follows the main and applies the effects chosen for it.\n"
+                                "Click to switch.");
+    link.roleButton.onClick = [this]
+    {
+        processorRef.setRole (isTrackMode() ? PreDropAudioProcessor::Role::main : PreDropAudioProcessor::Role::track);
+        applyRole();
+    };
+    addAndMakeVisible (link.roleButton);
+
+    addChildComponent (link.matrix);
+    addChildComponent (link.panel);
+
+    // --- Indicators (a TRACK shows what the main is driving it with) ----------
+    effectChips.setAmountSource ([this] { return displayedAmount(); });
     using Effect = EffectChips::Effect;
     for (const auto& source : { std::pair { Effect::hpf,    "hpfDepth" },
                                 std::pair { Effect::reverb, "reverbDepth" },
@@ -109,7 +134,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
                                 std::pair { Effect::riser,  "riserDepth" } })
     {
         const char* id = source.second;
-        effectChips.setDepthSource (source.first, [this, id] { return paramValue (processorRef, id); });
+        effectChips.setDepthSource (source.first, [this, id] { return displayedDepth (id); });
     }
     addAndMakeVisible (effectChips);
     addAndMakeVisible (buildUpCurve);
@@ -131,6 +156,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
                      (int) (kDesignWidth * 2.0f), (int) (kDesignHeight * 2.0f));
 
     setSize ((int) kDesignWidth, (int) kDesignHeight);
+    applyRole();
     startTimerHz (30);
 }
 
@@ -142,22 +168,90 @@ PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
     trimSlider.setLookAndFeel (nullptr);
     effectsButton.setLookAndFeel (nullptr);
     riserUi.button.setLookAndFeel (nullptr);
+    link.tracksButton.setLookAndFeel (nullptr);
+    link.roleButton.setLookAndFeel (nullptr);
     for (auto& sl : depthSliders)
         sl.setLookAndFeel (nullptr);
 }
 
-void PreDropAudioProcessorEditor::setDepthPanelOpen (bool shouldBeOpen)
+void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
 {
-    depthPanelOpen = shouldBeOpen;
+    reveal = newReveal;
 
-    // The depth knobs and the build-up curve share the same area, so swap which
-    // one occupies it. The chips stay live in both states.
-    buildUpCurve.setVisible (! shouldBeOpen);
+    // The curve, the depth knobs and the TRACKS panel share one slot; a TRACK
+    // shows its own panel there instead. The chips stay live throughout.
+    const bool main = ! isTrackMode();
+    buildUpCurve.setVisible (main && reveal == Reveal::curve);
     for (auto& sl : depthSliders)
-        sl.setVisible (shouldBeOpen);
+        sl.setVisible (main && reveal == Reveal::effects);
+    link.matrix.setVisible (main && reveal == Reveal::tracks);
+
+    effectsButton.setToggleState (reveal == Reveal::effects, juce::dontSendNotification);
+    link.tracksButton.setToggleState (reveal == Reveal::tracks, juce::dontSendNotification);
 
     resized();
     repaint();
+}
+
+bool PreDropAudioProcessorEditor::isTrackMode() const noexcept
+{
+    return processorRef.getRole() == PreDropAudioProcessor::Role::track;
+}
+
+void PreDropAudioProcessorEditor::applyRole()
+{
+    const bool track = isTrackMode();
+    link.shownAsTrack = track;
+
+    link.roleButton.setButtonText (track ? "TRACK" : "MAIN");
+    link.roleButton.setToggleState (track, juce::dontSendNotification);
+
+    riserUi.button.setVisible (! track);
+    effectsButton.setVisible (! track);
+    link.tracksButton.setVisible (! track);
+    link.panel.setVisible (track);
+
+    // As a TRACK the knob mirrors the main's Amount instead of editing this
+    // instance's own (unused) one.
+    if (track)
+    {
+        amountAttachment.reset();
+        amountSlider.setInterceptsMouseClicks (false, false);
+        amountSlider.setValue (displayedAmount(), juce::dontSendNotification);
+    }
+    else if (amountAttachment == nullptr)
+    {
+        amountSlider.setInterceptsMouseClicks (true, true);
+        amountAttachment = std::make_unique<SliderAttachment> (processorRef.getState(), "amount", amountSlider);
+    }
+
+    setReveal (reveal);
+}
+
+float PreDropAudioProcessorEditor::displayedAmount() const
+{
+    if (! isTrackMode())
+        return paramValue (processorRef, "amount");
+
+    const auto& hub = processorRef.getLinkHub();
+    return hub.tracksActive() ? hub.mainState().amount.load() : 0.0f;
+}
+
+float PreDropAudioProcessorEditor::displayedDepth (const char* depthId) const
+{
+    if (! isTrackMode())
+        return paramValue (processorRef, depthId);
+
+    // A track applies the main's depth for each effect switched on for it, and
+    // never the riser (that plays once, on the main).
+    const juce::String id (depthId);
+    const auto effect = id == "hpfDepth"    ? LinkHub::Effect::hpf
+                      : id == "reverbDepth" ? LinkHub::Effect::reverb
+                      : LinkHub::Effect::delay;
+    const auto& hub = processorRef.getLinkHub();
+    if (id == "riserDepth" || ! hub.tracksActive() || ! processorRef.isLinkEffectOn (effect))
+        return 0.0f;
+    return hub.mainState().depths[(size_t) effect].load();
 }
 
 void PreDropAudioProcessorEditor::updateRiserButton()
@@ -169,13 +263,8 @@ void PreDropAudioProcessorEditor::updateRiserButton()
     riserUi.shownName = name;
 
     // Lit (accent pill) while a user sample replaces the built-in noise.
-    auto label = name.isEmpty() ? juce::String ("NOISE")
-                                : juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension().toUpperCase();
-    if (label.length() > 16)
-        label = label.substring (0, 15) + juce::String::fromUTF8 ("\u2026");
-
-    riserUi.button.setButtonText ("RISER: " + label);
     riserUi.button.setToggleState (name.isNotEmpty(), juce::dontSendNotification);
+    fitRiserLabel();
     repaint();   // the lit pill's glow reaches beyond the button
     riserUi.button.setTooltip (name.isEmpty() ? "Built-in noise riser. Click, or drop an audio file here, to use your own sample."
                                               : "Riser sample: " + name);
@@ -220,9 +309,34 @@ void PreDropAudioProcessorEditor::loadRiser (const juce::File& file)
     updateRiserButton();
 }
 
+void PreDropAudioProcessorEditor::fitRiserLabel()
+{
+    // Shorten the sample's name until "RISER: NAME" fits the pill, which
+    // shares its row with TRACKS and EFFECTS.
+    const auto& name = riserUi.shownName;
+    auto label = name.isEmpty() ? juce::String ("NOISE")
+                                : juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension().toUpperCase();
+
+    // Before the first layout the pill has no width to fit to yet.
+    if (riserUi.button.getWidth() > 0)
+    {
+        const auto font = Fonts::sans (10.0f * uiScale, true, 0.16f);         // the pill's caption font
+        const float room = (float) riserUi.button.getWidth() - 30.0f * uiScale; // dot, gap and padding
+        const auto ellipsis = juce::String::fromUTF8 ("\u2026");
+        auto kept = label;
+        while (kept.isNotEmpty() && textWidth (font, "RISER: " + label) > room)
+        {
+            kept = kept.dropLastCharacters (1);
+            label = kept + ellipsis;
+        }
+    }
+
+    riserUi.button.setButtonText ("RISER: " + label);
+}
+
 bool PreDropAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    return files.size() == 1 && processorRef.isSupportedRiserFile (juce::File (files[0]));
+    return ! isTrackMode() && files.size() == 1 && processorRef.isSupportedRiserFile (juce::File (files[0]));
 }
 
 void PreDropAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
@@ -264,7 +378,17 @@ void PreDropAudioProcessorEditor::timerCallback()
 {
     updateRiserButton();
 
-    const float a = paramValue (processorRef, "amount");
+    if (isTrackMode() != link.shownAsTrack)
+        applyRole();
+    if (link.matrix.isVisible())
+        link.matrix.refresh();
+    if (link.panel.isVisible())
+        link.panel.refresh();
+
+    const float a = displayedAmount();
+    if (isTrackMode() && std::abs ((float) amountSlider.getValue() - a) > 1.0e-4f)
+        amountSlider.setValue (a, juce::dontSendNotification);
+
     const float m = paramValue (processorRef, "mix");
     const float t = paramValue (processorRef, "outputTrim");
 
@@ -276,7 +400,7 @@ void PreDropAudioProcessorEditor::timerCallback()
     // and the panel's painted percent labels need refreshing while it is open.
     for (size_t i = 0; i < depthParamIds.size(); ++i)
     {
-        const float d = paramValue (processorRef, depthParamIds[i]);
+        const float d = displayedDepth (depthParamIds[i]);
         if (std::abs (d - last.depths[i]) > 1.0e-4f)
         {
             last.depths[i] = d;
@@ -333,7 +457,7 @@ void PreDropAudioProcessorEditor::paint (juce::Graphics& g)
 
     paintSliderLabels (g, s);
 
-    if (depthPanelOpen)
+    if (reveal == Reveal::effects && ! isTrackMode())
         paintDepthPanel (g, s);
 }
 
@@ -389,22 +513,7 @@ void PreDropAudioProcessorEditor::paintHeader (juce::Graphics& g, float s) const
     g.drawText ("PreDrop", area.withTrimmedLeft (textWidth (wordmarkFont, house)),
                 juce::Justification::centredLeft, false);
 
-    const juce::String badge ("BUILD-UP");
-    const auto badgeFont = Fonts::sans (10.0f * s, true, 0.14f);
-    const float padX  = 11.0f * s;
-    const float padY  = 4.0f * s;
-    const float pillW = textWidth (badgeFont, badge) + padX * 2.0f;
-    const float pillH = 10.0f * s + padY * 2.0f;
-
-    const juce::Rectangle pill (area.getRight() - pillW, area.getCentreY() - pillH * 0.5f,
-                                pillW, pillH);
-
-    g.setColour (Palette::badge.withAlpha (0.12f));
-    g.fillRoundedRectangle (pill, juce::jmin (pillH * 0.5f, 20.0f * s));
-
-    g.setFont (badgeFont);
-    g.setColour (Palette::badge);
-    g.drawText (badge, pill, juce::Justification::centred, false);
+    // The MAIN / TRACK pill (a button) sits at the header's right edge.
 }
 
 void PreDropAudioProcessorEditor::paintSliderLabels (juce::Graphics& g, float s) const
@@ -445,6 +554,8 @@ void PreDropAudioProcessorEditor::resized()
     auto area = getLocalBounds().reduced (px (kPanelPad));
 
     layout.header = area.removeFromTop (px (20.0f));
+    link.roleButton.setBounds (layout.header.withTrimmedLeft (layout.header.getWidth() - px (78.0f))
+                                            .withSizeKeepingCentre (px (78.0f), px (20.0f)));
 
     area.removeFromTop (px (14.0f));                       // gap before knob
     auto knob = area.removeFromTop (px (172.0f));
@@ -453,17 +564,27 @@ void PreDropAudioProcessorEditor::resized()
     area.removeFromTop (px (16.0f));                       // gap before chips
     effectChips.setBounds (area.removeFromTop (px (40.0f)));
 
-    // A slim row holds the EFFECTS reveal toggle, right-aligned above the slot
-    // that the build-up curve and the depth panel share.
+    // A slim row holds RISER, TRACKS and EFFECTS above the slot that the curve,
+    // the depth knobs and the TRACKS panel share.
     area.removeFromTop (px (8.0f));
     auto buttonRow = area.removeFromTop (px (18.0f));
+    const int buttonRowTop = buttonRow.getY();
     effectsButton.setBounds (buttonRow.removeFromRight (px (84.0f)));
     buttonRow.removeFromRight (px (8.0f));
+    link.tracksButton.setBounds (buttonRow.removeFromRight (px (76.0f)));
+    buttonRow.removeFromRight (px (8.0f));
     riserUi.button.setBounds (buttonRow);
+    fitRiserLabel();
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
     layout.reveal = area.removeFromTop (px (114.0f));
     buildUpCurve.setBounds (layout.reveal);
+    link.matrix.setUiScale (s);
+    link.matrix.setBounds (layout.reveal);
+
+    // A TRACK has no button row: its panel takes the row and the slot.
+    link.panel.setUiScale (s);
+    link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
 
     // Lay out the four depth dials across the reveal slot (used when open): each
     // column is an arc on top with its name + value stacked beneath it.

@@ -188,7 +188,9 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 7, "seven parameters are exposed");
+    check (p.getParameters().size() == 12, "twelve parameters are exposed");
+    check (! p.getState().getParameter ("role")->isAutomatable() && ! p.getState().getParameter ("scope")->isAutomatable(),
+           "the MAIN / TRACK role and the applies-to choice stay out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
     check (approx (param (p, "outputTrim"), 0.0f, 1.0e-6f), "output trim defaults to 0 dB");
@@ -506,8 +508,9 @@ void testRiserSampleEditor()
     ed->fileDragEnter ({ riserFile.getFullPathName() }, 10, 10);
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
     check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
-    check (riserButton->getButtonText() == "RISER: PREDROP-EDITOR-" + juce::String::fromUTF8 ("\u2026"),
-           "the button shows the sample's name, shortened to fit");
+    const auto label = riserButton->getButtonText();
+    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::fromUTF8 ("\u2026")),
+           "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 
     // (The button's menu is a native popup window, which can't be opened
@@ -518,6 +521,210 @@ void testRiserSampleEditor()
            "going back to noise resets the button");
 
     riserFile.deleteFile();
+}
+
+// ---- Linking: MAIN on the master, TRACKs on chosen tracks -------------------
+juce::AudioProcessor::TrackProperties hostTrack (const juce::String& name)
+{
+    juce::AudioProcessor::TrackProperties props;
+    props.name = name;
+    return props;
+}
+
+void testLinkHub()
+{
+    std::printf ("Link hub:\n");
+    LinkHub hub;
+    const int a = 0, b = 0;
+
+    check (! hub.hasMain() && hub.claimMain (&a) && hub.isMain (&a), "the first instance to claim becomes the main");
+    check (! hub.claimMain (&b) && ! hub.isMain (&b), "a second claim is refused while the main exists");
+    check (hub.claimMain (&a), "claiming again as the main is fine");
+
+    hub.mainState().selectedTracksOnly.store (true);
+    check (hub.tracksActive(), "tracks are active while the main applies to selected tracks");
+    hub.releaseMain (&b);
+    check (hub.isMain (&a), "only the main itself can release the slot");
+    hub.releaseMain (&a);
+    check (! hub.hasMain() && ! hub.tracksActive(), "releasing the main deactivates the tracks");
+    check (hub.claimMain (&b), "the slot is free for the next main");
+}
+
+void testLinkedProcessing()
+{
+    std::printf ("Linked processing:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master;
+    check (master.getRole() == Role::main && master.isLinkMain(), "a new PreDrop is a MAIN and takes the link");
+
+    PreDropAudioProcessor guitar, drums;
+    guitar.setRole (Role::track);
+    drums.setRole (Role::track);
+    check (master.getLinkHub().getTracks().size() == 2, "tracks set to TRACK appear in the main's list");
+    check (guitar.getTrackName() == "Track 1" && drums.getTrackName() == "Track 2", "unnamed tracks are numbered");
+
+    drums.updateTrackProperties (hostTrack ("Drums"));
+    guitar.updateTrackProperties (hostTrack ("Audio 3"));
+    guitar.setTrackName ("Guitar");
+    check (drums.getTrackName() == "Drums", "the host's track name is used");
+    check (guitar.getTrackName() == "Guitar", "a name typed into PreDrop wins over the host's");
+
+    for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
+        drums.setLinkEffectOn (e, false);
+
+    for (auto* p : { &master, &guitar, &drums })
+        p->prepareToPlay (48000.0, 512);
+    setParam (master, "amount", 1.0f);
+    setParam (master, "riserDepth", 0.0f);   // keeps the main's own output comparable
+
+    // ALL TRACKS: the main processes the mix; tracks stay out of it.
+    check (! master.appliesToSelectedTracks(), "the main applies to all tracks by default");
+    check (settledChange (guitar, 512, 20) == 0.0f, "on ALL TRACKS a linked track passes audio through untouched");
+    check (settledChange (master, 512, 40) > 0.05f, "on ALL TRACKS the main processes the whole mix");
+
+    // SELECTED TRACKS: tracks apply their effects; the main adds only the riser.
+    master.setAppliesToSelectedTracks (true);
+    check (master.getLinkHub().tracksActive(), "SELECTED TRACKS activates the linked tracks");
+    check (settledChange (master, 512, 40) == 0.0f, "on SELECTED TRACKS the main leaves high-pass, reverb and delay to the tracks");
+    check (settledChange (guitar, 512, 40) > 0.05f, "a track with its effects on follows the main's Amount");
+    check (settledChange (drums, 512, 40) == 0.0f, "a track with every effect off is untouched");
+
+    drums.setLinkEffectOn (Effect::reverb, true);
+    check (settledChange (drums, 512, 40) > 0.01f, "switching one effect on for a track applies it");
+
+    setParam (master, "amount", 0.0f);
+    settledChange (guitar, 512, 10);                         // let the ramps settle
+    check (settledChange (guitar, 512, 20) == 0.0f, "Amount at 0 on the main returns the tracks to dry");
+
+    // Roles survive a save / reload, and so do a track's name and switches.
+    juce::MemoryBlock state;
+    drums.getStateInformation (state);
+    PreDropAudioProcessor reloaded;
+    reloaded.setStateInformation (state.getData(), (int) state.getSize());
+    check (reloaded.getRole() == Role::track && reloaded.isLinkEffectOn (Effect::reverb)
+             && ! reloaded.isLinkEffectOn (Effect::delay) && master.getLinkHub().getTracks().size() == 3,
+           "a reloaded TRACK relinks with its switches");
+
+    // A second MAIN works on its own until the first one steps down.
+    PreDropAudioProcessor second;
+    check (! second.isLinkMain(), "a second MAIN does not take over the link");
+    master.setRole (Role::track);
+    check (pumpUntil ([&] { return second.isLinkMain(); }), "when the main steps down, another MAIN takes the link");
+}
+
+void testLinkingEditors()
+{
+    std::printf ("Linking editors:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master, guitar, keys;
+    guitar.setRole (Role::track);
+    keys.setRole (Role::track);
+    guitar.setTrackName ("Guitar");
+    keys.setTrackName ("Keys");
+    setParam (master, "amount", 0.7f);
+
+    std::unique_ptr<juce::AudioProcessorEditor> mainEditor (master.createEditor());
+    juce::TextButton* roleButton = nullptr;
+    juce::TextButton* tracksButton = nullptr;
+    for (auto* b : findChildren<juce::TextButton> (*mainEditor))
+    {
+        if (b->getButtonText() == "MAIN")   roleButton = b;
+        if (b->getButtonText() == "TRACKS") tracksButton = b;
+    }
+    auto* matrix = findChild<TrackMatrix> (*mainEditor);
+    check (roleButton != nullptr && tracksButton != nullptr && matrix != nullptr,
+           "the main shows a MAIN pill, a TRACKS button and the tracks panel");
+    if (roleButton == nullptr || tracksButton == nullptr || matrix == nullptr)
+        return;
+
+    tracksButton->triggerClick();
+    pumpMessages (40);
+    check (matrix->isVisible() && ! findChild<BuildUpCurve> (*mainEditor)->isVisible(), "TRACKS opens the panel in the curve's place");
+    const auto allTracksView = render (*matrix);
+    check (hasDetail (render (*mainEditor)), "on ALL TRACKS the panel explains it covers the whole mix");
+
+    matrix->mouseDown (mouseAt (*matrix, matrix->scopeButton (true).getCentre(), false));
+    check (master.appliesToSelectedTracks(), "clicking SELECTED TRACKS switches the main to selected tracks");
+    matrix->refresh();
+    check (pixelsChanged (allTracksView, render (*matrix)) > 500, "the panel then lists the linked tracks");
+
+    matrix->mouseDown (mouseAt (*matrix, matrix->cell (1, Effect::reverb).getCentre(), false));
+    check (! guitar.isLinkEffectOn (Effect::reverb) && keys.isLinkEffectOn (Effect::reverb),
+           "clicking a track's REV switch turns reverb off for that track only");
+
+    matrix->mouseDown (mouseAt (*matrix, matrix->cell (0, Effect::delay).getCentre(), false));
+    check (! guitar.isLinkEffectOn (Effect::delay) && ! keys.isLinkEffectOn (Effect::delay), "ALL switches a column off for every track");
+    matrix->mouseDown (mouseAt (*matrix, matrix->cell (0, Effect::delay).getCentre(), false));
+    check (guitar.isLinkEffectOn (Effect::delay) && keys.isLinkEffectOn (Effect::delay), "and back on again");
+    matrix->refresh();
+    check (hasDetail (render (*mainEditor)), "the main renders with the tracks list");
+
+    // More tracks than fit: the list scrolls with the mouse wheel.
+    std::array<PreDropAudioProcessor, 3> more;
+    for (auto& extra : more)
+        extra.setRole (Role::track);
+    matrix->refresh();
+    const auto top = render (*matrix);
+    juce::MouseWheelDetails wheel {};
+    wheel.deltaY = -1.0f;
+    matrix->mouseWheelMove (mouseAt (*matrix, { 20.0f, 60.0f }, false), wheel);
+    check (pixelsChanged (top, render (*matrix)) > 100, "a long track list scrolls");
+
+    // A second MAIN explains that another instance holds the link.
+    PreDropAudioProcessor otherMain;
+    std::unique_ptr<juce::AudioProcessorEditor> otherEditor (otherMain.createEditor());
+    if (auto* otherMatrix = findChild<TrackMatrix> (*otherEditor))
+    {
+        otherMatrix->mouseDown (mouseAt (*otherMatrix, otherMatrix->scopeButton (true).getCentre(), false));
+        check (! otherMain.appliesToSelectedTracks() && hasDetail (render (*otherMatrix)),
+               "a MAIN that isn't the link shows why and ignores clicks");
+    }
+
+    // A TRACK's face: the main's Amount on a read-only knob, its own switches.
+    std::unique_ptr<juce::AudioProcessorEditor> trackEditor (guitar.createEditor());
+    auto* panel = findChild<TrackPanel> (*trackEditor);
+    const auto sliders = findChildren<juce::Slider> (*trackEditor);
+    check (panel != nullptr && panel->isVisible() && ! sliders.empty(), "a TRACK shows its link panel");
+    if (panel == nullptr || sliders.empty())
+        return;
+
+    pumpMessages (60);
+    check (approx ((float) sliders[0]->getValue(), 0.7f, 1.0e-3f), "a TRACK's knob shows the main's Amount");
+    check (panel->nameLabel().getText() == "Guitar", "a TRACK shows its name");
+
+    panel->nameLabel().setText ("Lead Guitar", juce::sendNotificationSync);
+    check (guitar.getTrackName() == "Lead Guitar", "renaming in the panel renames the track in the main's list");
+
+    for (auto* b : findChildren<juce::TextButton> (*panel))
+        if (b->getButtonText() == "HIGH-PASS")
+            b->triggerClick();
+    check (pumpUntil ([&] { return ! guitar.isLinkEffectOn (Effect::hpf); }), "a TRACK's own HIGH-PASS switch turns it off");
+    check (hasDetail (render (*trackEditor)), "a TRACK renders its face");
+
+    // Switching the main's role from its pill swaps its face over.
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::track && roleButton->getButtonText() == "TRACK"
+             && findChild<TrackPanel> (*mainEditor)->isVisible() && ! tracksButton->isVisible(),
+           "the MAIN / TRACK pill switches the role and the face");
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::main && tracksButton->isVisible(), "and back to MAIN");
+}
+
+void testEmptyTrackList()
+{
+    std::printf ("Empty track list:\n");
+    PreDropAudioProcessor master;
+    master.setAppliesToSelectedTracks (true);
+    TrackMatrix matrix (master);
+    matrix.setBounds (0, 0, 308, 114);
+    matrix.refresh();
+    check (hasDetail (render (matrix)), "with no linked tracks the panel says how to add one");
 }
 
 void testUnboundIndicators()
@@ -583,6 +790,10 @@ int main()
     testBuildUpCurveDrag();
     testRiserSampleLoading();
     testRiserSampleEditor();
+    testLinkHub();
+    testLinkedProcessing();
+    testLinkingEditors();
+    testEmptyTrackList();
     testUnboundIndicators();
     testButtonStates();
 

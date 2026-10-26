@@ -456,6 +456,53 @@ void testRiserSample()
     check (finite, "swapping riser samples while running keeps the output finite");
 }
 
+// ---- Test 3e: effects settled at "off" are skipped: bit-exact pass-through. ----
+void testIdleEffectsPassThrough()
+{
+    std::printf ("Idle effects:\n");
+
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+    PreDropEngine engine;
+    engine.prepare (sr, 2, block);
+
+    const auto runBlocks = [&] (int count, float amount)
+    {
+        engine.setAmount (amount);
+        float maxDiff = 0.0f;
+        bool finite = true;
+        for (int b = 0; b < count; ++b)
+        {
+            const auto in = makeSine (sr, 110.0, block);
+            auto buffer = in;
+            engine.process (buffer);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < block; ++n)
+                {
+                    finite = finite && std::isfinite (buffer.getSample (ch, n));
+                    maxDiff = std::max (maxDiff, std::abs (buffer.getSample (ch, n) - in.getSample (ch, n)));
+                }
+        }
+        return std::pair { maxDiff, finite };
+    };
+
+    check (runBlocks (20, 0.0f).first == 0.0f, "at Amount 0 the output is bit-identical to the input");
+
+    const auto [active, finite] = runBlocks (40, 1.0f);
+    check (finite && active > 0.05f, "building up re-engages every effect from idle");
+
+    runBlocks (10, 0.0f);   // let the 40 ms ramps settle back to off
+    check (runBlocks (20, 0.0f).first == 0.0f, "back at Amount 0 it is bit-identical again once settled");
+
+    // A linked track with nothing switched on: Amount up, every depth at 0.
+    engine.setHpfDepth (0.0f);
+    engine.setReverbDepth (0.0f);
+    engine.setDelayDepth (0.0f);
+    engine.setRiserDepth (0.0f);
+    runBlocks (10, 1.0f);
+    check (runBlocks (20, 1.0f).first == 0.0f, "with every depth at 0 the output is bit-identical at full Amount");
+}
+
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
 void testEmptyBlocks()
 {
@@ -514,6 +561,7 @@ int main()
     testStabilityAtFull();
     testEffectsInSync();
     testRiserSample();
+    testIdleEffectsPassThrough();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 

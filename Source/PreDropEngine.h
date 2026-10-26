@@ -123,7 +123,7 @@ public:
         Targets t;
 
         // 1. High-pass: sweeps up evenly in pitch (octaves) as Amount rises.
-        t.hpfCutoffHz = 20.0f * std::exp2 (hpfTopOctaves (depth.hpf) * p);
+        t.hpfCutoffHz = minHpfCutoffHz * std::exp2 (hpfTopOctaves (depth.hpf) * p);
 
         // 2. Reverb: the room grows with Amount; the wet send is compensated for
         //    the louder tail so its level rises in step with the others.
@@ -220,6 +220,7 @@ public:
         // Re-prime the coefficient caches so the next block re-applies the
         // cutoffs, and let the riser's level follower start from silence.
         lastHpfCutoff      = -1.0f;
+        idle               = {};
         riser.lastCutoff   = -1.0f;
         riser.meanSquare   = 0.0f;
         riser.signalRms    = 0.0f;
@@ -293,8 +294,21 @@ public:
 
         auto* const* data = buffer.getArrayOfWritePointers();
 
+        // An effect whose control has settled at "off" is skipped outright (and
+        // reset once on the way, so it re-engages from silence). At Amount 0, or
+        // on a linked track with nothing switched on, the audio passes through
+        // bit for bit and costs next to nothing.
+        const auto settledAtOff = [] (const auto& smoother, float off)
+        {
+            return ! smoother.isSmoothing() && smoother.getCurrentValue() <= off;
+        };
+        const bool hpfOn    = runOrIdle (idle.hpf,    settledAtOff (sm.hpfCutoff, minHpfCutoffHz), [this] { hpf.reset(); });
+        const bool reverbOn = runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); });
+        const bool delayOn  = runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); });
+        const bool riserOn  = runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0; });
+
         // --- 1. High-pass (per sample so the rising cutoff stays zipper-free) ----
-        for (int n = 0; n < numSamples; ++n)
+        for (int n = 0; hpfOn && n < numSamples; ++n)
         {
             // The cutoff only moves while the smoother ramps; recomputing the TPT
             // coefficient (an std::tan) every sample at a steady setting is pure
@@ -326,9 +340,11 @@ public:
 
         // --- 2. Reverb, wet only, on a copy of the high-passed signal ------------
         const int reverbChannels = juce::jmin (channels, 2);
+        const float reverbSize   = sm.reverbSize.skip (numSamples);
+        const float reverbLevel  = sm.reverbWet.skip (numSamples);
+        if (reverbOn)
         {
-            const float size = sm.reverbSize.skip (numSamples);
-            applyReverbParameters (size, sm.reverbWet.skip (numSamples));
+            applyReverbParameters (reverbSize, reverbLevel);
 
             for (int ch = 0; ch < reverbChannels; ++ch)
                 reverbBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
@@ -340,21 +356,33 @@ public:
             reverb.process (ctx);
         }
 
-        // --- 3. Delay / echo with feedback, then sum signal + echoes + reverb -----
-        auto* const* reverbWet = reverbBuffer.getArrayOfReadPointers();
-        for (int n = 0; n < numSamples; ++n)
+        // --- 3. Delay / echo with feedback (fed the high-passed signal) ---------
+        if (delayOn)
         {
-            const float wet = sm.delayWet.getNextValue();
-            const float fb  = sm.delayFb.getNextValue();
-
-            for (int ch = 0; ch < channels; ++ch)
+            for (int n = 0; n < numSamples; ++n)
             {
-                const float in      = data[ch][n];
-                const float delayed = delayLine.popSample (ch);
-                delayLine.pushSample (ch, in + delayed * fb);
-                data[ch][n] = in + delayed * wet + (ch < reverbChannels ? reverbWet[ch][n] : 0.0f);
+                const float wet = sm.delayWet.getNextValue();
+                const float fb  = sm.delayFb.getNextValue();
+
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    const float in      = data[ch][n];
+                    const float delayed = delayLine.popSample (ch);
+                    delayLine.pushSample (ch, in + delayed * fb);
+                    data[ch][n] = in + delayed * wet;
+                }
             }
         }
+        else
+        {
+            sm.delayWet.skip (numSamples);
+            sm.delayFb.skip (numSamples);
+        }
+
+        // Sum the reverb in alongside the signal and echoes.
+        if (reverbOn)
+            for (int ch = 0; ch < reverbChannels; ++ch)
+                juce::FloatVectorOperations::add (data[ch], reverbBuffer.getReadPointer (ch), numSamples);
 
         // --- 4. Riser: user sample or filtered-noise sweep (summed in parallel) --
         const RiserSample* sample = activeRiser.get();
@@ -362,7 +390,12 @@ public:
 
         const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
         float signalRms = riserRmsStart;
-        for (int n = 0; n < numSamples; ++n)
+        if (! riserOn)
+        {
+            sm.riserLevel.skip (numSamples);
+            sm.riserCutoff.skip (numSamples);
+        }
+        for (int n = 0; riserOn && n < numSamples; ++n)
         {
             const float level = sm.riserLevel.getNextValue();
             signalRms += rmsStep;
@@ -421,6 +454,26 @@ public:
     }
 
 private:
+    static constexpr float minHpfCutoffHz = 20.0f;   // where the sweep parks: the HPF's "off"
+
+    // Whether an effect runs this block. One that has settled at "off" is
+    // skipped, and reset the first time, so it later re-engages from silence.
+    template <typename Reset>
+    static bool runOrIdle (bool& isIdle, bool settledOff, Reset&& resetEffect)
+    {
+        if (! settledOff)
+        {
+            isIdle = false;
+            return true;
+        }
+        if (! isIdle)
+        {
+            resetEffect();
+            isIdle = true;
+        }
+        return false;
+    }
+
     void applyReverbParameters (float roomSize, float wetLevel)
     {
         juce::dsp::Reverb::Parameters params;
@@ -467,6 +520,16 @@ private:
     // Last cutoff pushed to the HPF, so process() can skip recomputing an
     // identical coefficient (an std::tan) every sample. -1 forces the first apply.
     float lastHpfCutoff = -1.0f;
+
+    // Effects currently skipped because they have settled at "off".
+    struct Idle
+    {
+        bool hpf    = false;
+        bool reverb = false;
+        bool delay  = false;
+        bool riser  = false;
+    };
+    Idle idle;
 
     // The riser: the noise band-pass, its coefficient cache and unit-RMS gain
     // for the current centre, the level follower that ties it to the signal,

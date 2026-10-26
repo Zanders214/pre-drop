@@ -20,6 +20,13 @@ int main()
     const int    bs = 512;
     proc.prepareToPlay (sr, bs);
 
+    // A second instance linked as a TRACK, so the linked path (reading the
+    // main's published controls, applying the track's effects) runs too.
+    PreDropAudioProcessor track;
+    track.setRole (PreDropAudioProcessor::Role::track);
+    track.prepareToPlay (sr, bs);
+    juce::AudioBuffer<float> trackBuffer (2, bs);
+
     // Drive the build-up macro to 100% so HPF + reverb + delay + riser all run.
     *proc.getState().getRawParameterValue ("amount") = 1.0f;
 
@@ -51,6 +58,7 @@ int main()
     {
         if (b == blocks / 2)
         {
+            proc.setAppliesToSelectedTracks (true);   // hand HPF / reverb / delay to the track
             const auto error = proc.loadRiserSample (riserFile);
             if (error.isNotEmpty())
             {
@@ -71,10 +79,13 @@ int main()
         }
 
         juce::MidiBuffer midi;                          // effect: stays empty
+        trackBuffer.makeCopyOf (buffer, true);
         proc.processBlock (buffer, midi);               // exercises the annotated DSP
+        track.processBlock (trackBuffer, midi);         // the linked-track path
     }
 
     riserFile.deleteFile();
-    std::printf ("PASS: %d processBlock calls (noise riser, then a sample riser), no RT-safety violations\n", blocks);
+    std::printf ("PASS: %d blocks on a main and a linked track (noise riser, then a sample riser with the\n"
+                 "      track applying the effects), no RT-safety violations\n", blocks);
     return 0;
 }
