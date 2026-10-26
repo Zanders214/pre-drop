@@ -7,6 +7,8 @@
 #include "PreDropLookAndFeel.h"
 #include "EffectChips.h"
 #include "BuildUpCurve.h"
+#include "TrackMatrix.h"
+#include "TrackPanel.h"
 
 /**
     PreDropAudioProcessorEditor — "Direction D — Neon Clean".
@@ -15,6 +17,11 @@
     a centred readout, four effect status chips, a live build-up energy histogram
     (itself a second handle on Amount), and Mix / Output sliders. Everything is
     drawn natively (no WebView) and scales proportionally from the 360 px design.
+
+    The header's MAIN / TRACK pill switches the instance's role. As MAIN, the
+    slot under the chips shows the curve, the EFFECTS depth knobs or the TRACKS
+    panel; as TRACK it shows the track's link status and effect switches, and
+    the knob and chips mirror the main's Amount and depths.
 */
 class PreDropAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::FileDragAndDropTarget,
@@ -39,10 +46,21 @@ private:
     void showRiserMenu();
     void loadRiser (const juce::File& file);
     void updateRiserButton();
+    void fitRiserLabel();
     void paintHeader (juce::Graphics&, float scale) const;
     void paintSliderLabels (juce::Graphics&, float scale) const;
     void paintDepthPanel (juce::Graphics&, float scale) const;
-    void setDepthPanelOpen (bool shouldBeOpen);
+
+    // What fills the slot under the chips while this instance is MAIN.
+    enum class Reveal { curve, effects, tracks };
+    void setReveal (Reveal newReveal);
+
+    // Linking. "Track mode" covers TRACK and RETURN: both follow the main.
+    bool isTrackMode() const noexcept;
+    bool isReturnMode() const noexcept;
+    void applyRole();
+    float displayedAmount() const;                 // the main's, as a TRACK
+    float displayedDepth (const char* depthId) const;
 
     PreDropAudioProcessor& processorRef;
     PreDropLookAndFeel     lnf;
@@ -78,8 +96,8 @@ private:
     };
     Layout layout;
 
-    bool  depthPanelOpen = false;
-    float uiScale = 1.0f;
+    Reveal reveal  = Reveal::curve;
+    float  uiScale = 1.0f;
 
     // Cached parameter values so the live repaint only fires on change.
     struct LastValues
@@ -101,6 +119,20 @@ private:
         bool                               dragActive = false;
     };
     RiserControl riserUi;
+
+    // The MAIN / TRACK pill, the main's TRACKS button and panel, and the panel
+    // a TRACK shows instead.
+    struct LinkControls
+    {
+        explicit LinkControls (PreDropAudioProcessor& p) : matrix (p), panel (p) {}
+
+        juce::TextButton roleButton;
+        juce::TextButton tracksButton;
+        TrackMatrix      matrix;
+        TrackPanel       panel;
+        int              shownRole = -1;   // forces the first applyRole
+    };
+    LinkControls link;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessorEditor)
 };

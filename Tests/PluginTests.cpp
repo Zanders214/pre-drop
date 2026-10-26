@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -128,6 +129,25 @@ float settledChange (PreDropAudioProcessor& p, int block, int blocks)
     return (float) std::sqrt (sum / block);
 }
 
+// Runs a sine through the processor and returns the RMS of the final block's
+// output itself (for a return, whose output is only the effects).
+float settledOutputRms (PreDropAudioProcessor& p, int block, int blocks)
+{
+    juce::MidiBuffer midi;
+    juce::AudioBuffer<float> buffer (2, block);
+    for (int b = 0; b < blocks; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < block; ++n)
+                buffer.setSample (ch, n, 0.5f * std::sin (0.05f * (float) (b * block + n)));
+        p.processBlock (buffer, midi);
+    }
+    double sum = 0.0;
+    for (int n = 0; n < block; ++n)
+        sum += (double) buffer.getSample (0, n) * buffer.getSample (0, n);
+    return (float) std::sqrt (sum / block);
+}
+
 // Writes a 16-bit WAV of `seconds` of noise (or silence) to the temp folder.
 juce::File writeWav (const juce::String& name, double sampleRate, double seconds, int channels, bool silent = false)
 {
@@ -163,13 +183,22 @@ bool pumpUntil (Condition done)
     return done();
 }
 
-juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, bool dragged)
+// A mouse event at `pos`; for a drag, `downPos` is where the button went down.
+juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> pos, bool dragged,
+                          std::optional<juce::Point<float>> downPos = std::nullopt, int clicks = 1)
 {
     const auto now = juce::Time::getCurrentTime();
     return { juce::Desktop::getInstance().getMainMouseSource(), pos, {},
              juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
              juce::MouseInputSource::defaultRotation, juce::MouseInputSource::defaultTiltX,
-             juce::MouseInputSource::defaultTiltY, &c, &c, now, pos, now, 1, dragged };
+             juce::MouseInputSource::defaultTiltY, &c, &c, now, downPos.value_or (pos), now, clicks, dragged };
+}
+
+// Clicks (down + up, no drag) at `pos`.
+void click (juce::Component& c, juce::Point<float> pos)
+{
+    c.mouseDown (mouseAt (c, pos, false));
+    c.mouseUp (mouseAt (c, pos, false));
 }
 
 // ---- Processor --------------------------------------------------------------
@@ -188,7 +217,9 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 7, "seven parameters are exposed");
+    check (p.getParameters().size() == 12, "twelve parameters are exposed");
+    check (! p.getState().getParameter ("role")->isAutomatable() && ! p.getState().getParameter ("scope")->isAutomatable(),
+           "the MAIN / TRACK role and the applies-to choice stay out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
     check (approx (param (p, "outputTrim"), 0.0f, 1.0e-6f), "output trim defaults to 0 dB");
@@ -506,8 +537,9 @@ void testRiserSampleEditor()
     ed->fileDragEnter ({ riserFile.getFullPathName() }, 10, 10);
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
     check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
-    check (riserButton->getButtonText() == "RISER: PREDROP-EDITOR-" + juce::String::fromUTF8 ("\u2026"),
-           "the button shows the sample's name, shortened to fit");
+    const auto label = riserButton->getButtonText();
+    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
+           "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 
     // (The button's menu is a native popup window, which can't be opened
@@ -518,6 +550,304 @@ void testRiserSampleEditor()
            "going back to noise resets the button");
 
     riserFile.deleteFile();
+}
+
+// ---- Linking: MAIN on the master, TRACKs on chosen tracks -------------------
+juce::AudioProcessor::TrackProperties hostTrack (const juce::String& name)
+{
+    juce::AudioProcessor::TrackProperties props;
+    props.name = name;
+    return props;
+}
+
+void testLinkHub()
+{
+    std::printf ("Link hub:\n");
+    LinkHub hub;
+    const int a = 0, b = 0;
+
+    check (! hub.hasMain() && hub.claimMain (&a) && hub.isMain (&a), "the first instance to claim becomes the main");
+    check (! hub.claimMain (&b) && ! hub.isMain (&b), "a second claim is refused while the main exists");
+    check (hub.claimMain (&a), "claiming again as the main is fine");
+
+    hub.mainState().selectedTracksOnly.store (true);
+    check (hub.tracksActive(), "tracks are active while the main applies to selected tracks");
+    hub.releaseMain (&b);
+    check (hub.isMain (&a), "only the main itself can release the slot");
+    hub.releaseMain (&a);
+    check (! hub.hasMain() && ! hub.tracksActive(), "releasing the main deactivates the tracks");
+    check (hub.claimMain (&b), "the slot is free for the next main");
+}
+
+void testLinkedProcessing()
+{
+    std::printf ("Linked processing:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master;
+    check (master.getRole() == Role::main && master.isLinkMain(), "a new PreDrop is a MAIN and takes the link");
+
+    PreDropAudioProcessor guitar, drums;
+    guitar.setRole (Role::track);
+    drums.setRole (Role::track);
+    check (master.getLinkHub().getTracks().size() == 2, "tracks set to TRACK appear in the main's list");
+    check (guitar.getTrackName() == "Track 1" && drums.getTrackName() == "Track 2", "unnamed tracks are numbered");
+
+    drums.updateTrackProperties (hostTrack ("Drums"));
+    guitar.updateTrackProperties (hostTrack ("Audio 3"));
+    guitar.setTrackName ("Guitar");
+    check (drums.getTrackName() == "Drums", "the host's track name is used");
+    check (guitar.getTrackName() == "Guitar", "a name typed into PreDrop wins over the host's");
+
+    for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
+        drums.setLinkLevel (e, 0.0f);
+
+    for (auto* p : { &master, &guitar, &drums })
+        p->prepareToPlay (48000.0, 512);
+    setParam (master, "amount", 1.0f);
+    setParam (master, "riserDepth", 0.0f);   // keeps the main's own output comparable
+
+    // ALL TRACKS: the main processes the mix; tracks stay out of it.
+    check (! master.appliesToSelectedTracks(), "the main applies to all tracks by default");
+    check (settledChange (guitar, 512, 20) == 0.0f, "on ALL TRACKS a linked track passes audio through untouched");
+    check (settledChange (master, 512, 40) > 0.05f, "on ALL TRACKS the main processes the whole mix");
+
+    // SELECTED TRACKS: tracks apply their effects; the main adds only the riser.
+    master.setAppliesToSelectedTracks (true);
+    check (master.getLinkHub().tracksActive(), "SELECTED TRACKS activates the linked tracks");
+    check (settledChange (master, 512, 40) == 0.0f, "on SELECTED TRACKS the main leaves high-pass, reverb and delay to the tracks");
+    check (settledChange (guitar, 512, 40) > 0.05f, "a track with its effects on follows the main's Amount");
+    check (settledChange (drums, 512, 40) == 0.0f, "a track with every effect off is untouched");
+
+    drums.setLinkLevel (Effect::reverb, 1.0f);
+    check (settledChange (drums, 512, 40) > 0.01f, "raising one effect's level for a track applies it");
+
+    // A track's level is its share of the main's depth: two tracks fed the same
+    // signal, reverb only, one at 100% and one at 50%, differ by exactly half.
+    {
+        PreDropAudioProcessor full, half;
+        for (auto* p : { &full, &half })
+        {
+            p->setRole (Role::track);
+            p->setLinkLevel (Effect::hpf, 0.0f);
+            p->setLinkLevel (Effect::delay, 0.0f);
+            p->prepareToPlay (48000.0, 512);
+        }
+        half.setLinkLevel (Effect::reverb, 0.5f);
+        const float fullReverb = settledChange (full, 512, 60);
+        const float halfReverb = settledChange (half, 512, 60);
+        check (fullReverb > 0.01f && approx (halfReverb / fullReverb, 0.5f, 0.02f),
+               "a track at 50% gets half the reverb of one at 100% (ratio "
+                 + std::to_string (halfReverb / fullReverb).substr (0, 5) + ")");
+    }
+
+    setParam (master, "amount", 0.0f);
+    settledChange (guitar, 512, 10);                         // let the ramps settle
+    check (settledChange (guitar, 512, 20) == 0.0f, "Amount at 0 on the main returns the tracks to dry");
+
+    // Roles survive a save / reload, and so do a track's name and switches.
+    juce::MemoryBlock state;
+    drums.getStateInformation (state);
+    PreDropAudioProcessor reloaded;
+    reloaded.setStateInformation (state.getData(), (int) state.getSize());
+    check (reloaded.getRole() == Role::track && approx (reloaded.getLinkLevel (Effect::reverb), 1.0f, 1.0e-6f)
+             && approx (reloaded.getLinkLevel (Effect::delay), 0.0f, 1.0e-6f) && master.getLinkHub().getTracks().size() == 3,
+           "a reloaded TRACK relinks with its levels");
+
+    // A second MAIN works on its own until the first one steps down.
+    PreDropAudioProcessor second;
+    check (! second.isLinkMain(), "a second MAIN does not take over the link");
+    master.setRole (Role::track);
+    check (pumpUntil ([&] { return second.isLinkMain(); }), "when the main steps down, another MAIN takes the link");
+}
+
+void testLinkingEditors()
+{
+    std::printf ("Linking editors:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master, guitar, keys;
+    guitar.setRole (Role::track);
+    keys.setRole (Role::track);
+    guitar.setTrackName ("Guitar");
+    keys.setTrackName ("Keys");
+    setParam (master, "amount", 0.7f);
+
+    std::unique_ptr<juce::AudioProcessorEditor> mainEditor (master.createEditor());
+    juce::TextButton* roleButton = nullptr;
+    juce::TextButton* tracksButton = nullptr;
+    for (auto* b : findChildren<juce::TextButton> (*mainEditor))
+    {
+        if (b->getButtonText() == "MAIN")   roleButton = b;
+        if (b->getButtonText() == "TRACKS") tracksButton = b;
+    }
+    auto* matrix = findChild<TrackMatrix> (*mainEditor);
+    check (roleButton != nullptr && tracksButton != nullptr && matrix != nullptr,
+           "the main shows a MAIN pill, a TRACKS button and the tracks panel");
+    if (roleButton == nullptr || tracksButton == nullptr || matrix == nullptr)
+        return;
+
+    tracksButton->triggerClick();
+    pumpMessages (40);
+    check (matrix->isVisible() && ! findChild<BuildUpCurve> (*mainEditor)->isVisible(), "TRACKS opens the panel in the curve's place");
+    const auto allTracksView = render (*matrix);
+    check (hasDetail (render (*mainEditor)), "on ALL TRACKS the panel explains it covers the whole mix");
+
+    matrix->mouseDown (mouseAt (*matrix, matrix->scopeButton (true).getCentre(), false));
+    check (master.appliesToSelectedTracks(), "clicking SELECTED TRACKS switches the main to selected tracks");
+    matrix->refresh();
+    check (pixelsChanged (allTracksView, render (*matrix)) > 500, "the panel then lists the linked tracks");
+
+    click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
+    check (guitar.getLinkLevel (Effect::reverb) == 0.0f && keys.getLinkLevel (Effect::reverb) == 1.0f,
+           "clicking a track's REV level turns reverb off for that track only");
+    click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
+    check (guitar.getLinkLevel (Effect::reverb) == 1.0f, "clicking it again brings it back to 100%");
+
+    // Dragging a cell down by 30 px (half the 60 px travel) sets it to 50%.
+    const auto delayCell = matrix->cell (1, Effect::delay).getCentre();
+    matrix->mouseDown (mouseAt (*matrix, delayCell, false));
+    matrix->mouseDrag (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
+    matrix->mouseUp (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
+    check (approx (guitar.getLinkLevel (Effect::delay), 0.5f, 0.02f) && keys.getLinkLevel (Effect::delay) == 1.0f,
+           "dragging a track's DLY level sets it (to "
+             + std::to_string (guitar.getLinkLevel (Effect::delay)).substr (0, 4) + ")");
+    matrix->mouseDoubleClick (mouseAt (*matrix, delayCell, false, std::nullopt, 2));
+    check (guitar.getLinkLevel (Effect::delay) == 1.0f, "double-clicking a level resets it to 100%");
+
+    click (*matrix, matrix->cell (0, Effect::delay).getCentre());
+    check (guitar.getLinkLevel (Effect::delay) == 0.0f && keys.getLinkLevel (Effect::delay) == 0.0f,
+           "clicking ALL turns a column off for every track");
+    click (*matrix, matrix->cell (0, Effect::delay).getCentre());
+    check (guitar.getLinkLevel (Effect::delay) == 1.0f && keys.getLinkLevel (Effect::delay) == 1.0f, "and back to 100%");
+
+    const auto allHpf = matrix->cell (0, Effect::hpf).getCentre();
+    matrix->mouseDown (mouseAt (*matrix, allHpf, false));
+    matrix->mouseDrag (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
+    matrix->mouseUp (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
+    check (approx (guitar.getLinkLevel (Effect::hpf), 0.25f, 0.02f) && approx (keys.getLinkLevel (Effect::hpf), 0.25f, 0.02f),
+           "dragging ALL sets a column for every track");
+    matrix->refresh();
+    check (hasDetail (render (*mainEditor)), "the main renders with the tracks list");
+
+    // More tracks than fit: the list scrolls with the mouse wheel.
+    std::array<PreDropAudioProcessor, 3> more;
+    for (auto& extra : more)
+        extra.setRole (Role::track);
+    matrix->refresh();
+    const auto top = render (*matrix);
+    juce::MouseWheelDetails wheel {};
+    wheel.deltaY = -1.0f;
+    matrix->mouseWheelMove (mouseAt (*matrix, { 20.0f, 60.0f }, false), wheel);
+    check (pixelsChanged (top, render (*matrix)) > 100, "a long track list scrolls");
+
+    // A second MAIN explains that another instance holds the link.
+    PreDropAudioProcessor otherMain;
+    std::unique_ptr<juce::AudioProcessorEditor> otherEditor (otherMain.createEditor());
+    if (auto* otherMatrix = findChild<TrackMatrix> (*otherEditor))
+    {
+        otherMatrix->mouseDown (mouseAt (*otherMatrix, otherMatrix->scopeButton (true).getCentre(), false));
+        check (! otherMain.appliesToSelectedTracks() && hasDetail (render (*otherMatrix)),
+               "a MAIN that isn't the link shows why and ignores clicks");
+    }
+
+    // A TRACK's face: the main's Amount on a read-only knob, its own switches.
+    std::unique_ptr<juce::AudioProcessorEditor> trackEditor (guitar.createEditor());
+    auto* panel = findChild<TrackPanel> (*trackEditor);
+    const auto sliders = findChildren<juce::Slider> (*trackEditor);
+    check (panel != nullptr && panel->isVisible() && ! sliders.empty(), "a TRACK shows its link panel");
+    if (panel == nullptr || sliders.empty())
+        return;
+
+    pumpMessages (60);
+    check (approx ((float) sliders[0]->getValue(), 0.7f, 1.0e-3f), "a TRACK's knob shows the main's Amount");
+    check (panel->nameLabel().getText() == "Guitar", "a TRACK shows its name");
+
+    panel->nameLabel().setText ("Lead Guitar", juce::sendNotificationSync);
+    check (guitar.getTrackName() == "Lead Guitar", "renaming in the panel renames the track in the main's list");
+
+    panel->levelKnob (Effect::reverb).setValue (0.3, juce::sendNotificationSync);
+    check (approx (guitar.getLinkLevel (Effect::reverb), 0.3f, 1.0e-3f), "a TRACK's own REVERB knob sets its level");
+    setParam (guitar, "trackDelay", 0.6f);
+    check (pumpUntil ([&] { return std::abs (panel->levelKnob (Effect::delay).getValue() - 0.6) < 1.0e-3; }),
+           "a level changed from the main moves the TRACK's knob");
+    check (hasDetail (render (*trackEditor)), "a TRACK renders its face");
+
+    // Switching the main's role from its pill swaps its face over.
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::track && roleButton->getButtonText() == "TRACK"
+             && findChild<TrackPanel> (*mainEditor)->isVisible() && ! tracksButton->isVisible(),
+           "the MAIN / TRACK pill switches the role and the face");
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::returnTrack && roleButton->getButtonText() == "RETURN"
+             && findChild<TrackPanel> (*mainEditor)->isVisible() && ! findChild<TrackPanel> (*mainEditor)->nameLabel().isVisible()
+             && ! findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
+           "clicking again makes it a RETURN: the sends panel, and Mix locked to wet");
+    check (hasDetail (render (*mainEditor)), "a RETURN renders its face");
+    roleButton->triggerClick();
+    pumpMessages (60);
+    check (master.getRole() == Role::main && tracksButton->isVisible() && findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
+           "and once more back to MAIN");
+}
+
+void testReturnRole()
+{
+    std::printf ("RETURN role:\n");
+    using Role = PreDropAudioProcessor::Role;
+    using Effect = LinkHub::Effect;
+
+    PreDropAudioProcessor master, fx;
+    fx.setRole (Role::returnTrack);
+    auto& hub = master.getLinkHub();
+    check (fx.followsMain() && hub.numReturns() == 1 && hub.getTracks().empty(),
+           "a RETURN links as a return, not as a row in the track list");
+
+    for (auto* p : { &master, &fx })
+        p->prepareToPlay (48000.0, 512);
+    setParam (master, "amount", 1.0f);
+
+    check (settledOutputRms (fx, 512, 40) == 0.0f, "on ALL TRACKS a return is silent (the main does the effects)");
+
+    master.setAppliesToSelectedTracks (true);
+    check (settledOutputRms (fx, 512, 60) > 0.01f, "on SELECTED TRACKS a return adds reverb and delay to what is sent");
+
+    // Wet only: the send itself never comes out of the return, even with Mix down.
+    setParam (fx, "mix", 0.0f);
+    check (settledChange (fx, 512, 40) > 0.1f, "a return ignores Mix: it stays fully wet");
+    fx.setLinkLevel (Effect::reverb, 0.0f);
+    fx.setLinkLevel (Effect::delay, 0.0f);
+    settledOutputRms (fx, 512, 10);   // let the ramps settle to off
+    check (settledOutputRms (fx, 512, 20) == 0.0f, "with its reverb and delay at 0 a return is silent: no dry leaks through");
+
+    juce::MemoryBlock state;
+    fx.getStateInformation (state);
+    PreDropAudioProcessor reloaded;
+    reloaded.setStateInformation (state.getData(), (int) state.getSize());
+    check (reloaded.getRole() == Role::returnTrack && hub.numReturns() == 2, "a reloaded RETURN relinks");
+
+    fx.setRole (Role::main);
+    check (hub.numReturns() == 1, "switching a RETURN to another role unlinks it");
+
+    // The main's panel says how many returns are linked.
+    TrackMatrix matrix (master);
+    matrix.setBounds (0, 0, 308, 114);
+    matrix.refresh();
+    check (hasDetail (render (matrix)), "with only returns linked the panel explains the sends");
+}
+
+void testEmptyTrackList()
+{
+    std::printf ("Empty track list:\n");
+    PreDropAudioProcessor master;
+    master.setAppliesToSelectedTracks (true);
+    TrackMatrix matrix (master);
+    matrix.setBounds (0, 0, 308, 114);
+    matrix.refresh();
+    check (hasDetail (render (matrix)), "with no linked tracks the panel says how to add one");
 }
 
 void testUnboundIndicators()
@@ -583,6 +913,11 @@ int main()
     testBuildUpCurveDrag();
     testRiserSampleLoading();
     testRiserSampleEditor();
+    testLinkHub();
+    testLinkedProcessing();
+    testLinkingEditors();
+    testReturnRole();
+    testEmptyTrackList();
     testUnboundIndicators();
     testButtonStates();
 

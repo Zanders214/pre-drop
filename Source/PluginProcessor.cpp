@@ -10,12 +10,36 @@ namespace ParamID
     static constexpr const char* delayDepth  = "delayDepth";
     static constexpr const char* riserDepth  = "riserDepth";
     static constexpr const char* hpfDepth    = "hpfDepth";
+    static constexpr const char* role        = "role";
+    static constexpr const char* scope       = "scope";
+    static constexpr const char* trackHpf    = "trackHpf";
+    static constexpr const char* trackReverb = "trackReverb";
+    static constexpr const char* trackDelay  = "trackDelay";
 }
 
 namespace
 {
     // Child of the saved state that carries the riser sample, if one is loaded.
     const juce::Identifier riserStateTag { "RISER_SAMPLE" };
+
+    // State property holding a track name typed into PreDrop.
+    const juce::Identifier trackNameTag { "trackName" };
+
+    // The main's controls that linked tracks follow.
+    constexpr std::array<const char*, 5> linkedParameters { ParamID::amount, ParamID::hpfDepth, ParamID::reverbDepth,
+                                                            ParamID::delayDepth, ParamID::scope };
+
+    // Parameter holding whether a linked track applies `effect`.
+    const char* trackEffect (LinkHub::Effect effect)
+    {
+        switch (effect)
+        {
+            case LinkHub::Effect::reverb: return ParamID::trackReverb;
+            case LinkHub::Effect::delay:  return ParamID::trackDelay;
+            case LinkHub::Effect::hpf:    break;
+        }
+        return ParamID::trackHpf;
+    }
 
     // Largest file accepted, so a stray long recording can't bloat the project.
     constexpr juce::int64 maxRiserFileBytes = 64 * 1024 * 1024;
@@ -28,12 +52,26 @@ PreDropAudioProcessor::PreDropAudioProcessor()
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
     formats.registerBasicFormats();
-    startTimerHz (4);   // frees riser samples the audio thread has swapped out
+
+    // Publish the main's controls the moment they change (from the UI, the
+    // host's automation, or a state load), not only when it next processes.
+    for (auto* id : linkedParameters)
+        apvts.addParameterListener (id, this);
+
+    updateLink();
+    startTimerHz (10);   // keeps the link current; frees swapped-out riser samples
 }
 
 PreDropAudioProcessor::~PreDropAudioProcessor()
 {
     stopTimer();
+    for (auto* id : linkedParameters)
+        apvts.removeParameterListener (id, this);
+    if (link.registered)
+        linkHub->removeTrack (this);
+    if (link.registeredReturn)
+        linkHub->removeReturn (this);
+    linkHub->releaseMain (this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::createParameterLayout()
@@ -75,6 +113,30 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
     addDepth (ParamID::riserDepth,  "Riser");
     addDepth (ParamID::hpfDepth,    "High-Pass");
 
+    // Linking. Role and scope are set-up choices, not performance controls, so
+    // they are kept out of the host's automation lanes.
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ParamID::role, 1 }, "Role", StringArray { "Main", "Track", "Return" }, 0,
+        AudioParameterChoiceAttributes().withAutomatable (false)));
+
+    layout.add (std::make_unique<AudioParameterChoice> (
+        ParameterID { ParamID::scope, 1 }, "Applies To", StringArray { "All tracks", "Selected tracks" }, 0,
+        AudioParameterChoiceAttributes().withAutomatable (false)));
+
+    // How much of each effect this instance gets while it is a linked TRACK:
+    // a share of the main's depth for that effect (100% = all of it, 0% = off).
+    const auto addTrackLevel = [&] (const char* id, const char* name)
+    {
+        layout.add (std::make_unique<AudioParameterFloat> (
+            ParameterID { id, 1 }, name,
+            NormalisableRange<float> (0.0f, 1.0f), 1.0f,
+            AudioParameterFloatAttributes().withStringFromValueFunction (percentFromValue)));
+    };
+
+    addTrackLevel (ParamID::trackHpf,    "Track High-Pass");
+    addTrackLevel (ParamID::trackReverb, "Track Reverb");
+    addTrackLevel (ParamID::trackDelay,  "Track Delay");
+
     return layout;
 }
 
@@ -114,13 +176,50 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     for (int i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    engine.setAmount       (apvts.getRawParameterValue (ParamID::amount)->load());
-    engine.setMix          (apvts.getRawParameterValue (ParamID::mix)->load());
-    engine.setOutputTrimDb (apvts.getRawParameterValue (ParamID::outputTrim)->load());
-    engine.setReverbDepth  (apvts.getRawParameterValue (ParamID::reverbDepth)->load());
-    engine.setDelayDepth   (apvts.getRawParameterValue (ParamID::delayDepth)->load());
-    engine.setRiserDepth   (apvts.getRawParameterValue (ParamID::riserDepth)->load());
-    engine.setHpfDepth     (apvts.getRawParameterValue (ParamID::hpfDepth)->load());
+    const auto param = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+
+    // A RETURN outputs only the effects of what is sent to it: the dry signal
+    // already reaches the mix through each track, so Mix is fixed at fully wet.
+    const auto role = getRole();
+    engine.setWetOnly      (role == Role::returnTrack);
+    engine.setMix          (role == Role::returnTrack ? 1.0f : param (ParamID::mix));
+    engine.setOutputTrimDb (param (ParamID::outputTrim));
+
+    if (role != Role::main)
+    {
+        // A linked TRACK or RETURN follows the main's Amount, and gets its own
+        // share of the main's depth for each effect. The riser plays once, on
+        // the main. With no main, or the main applying to the whole mix,
+        // everything ramps to zero: a track passes its audio through, a return
+        // goes silent.
+        const auto& main  = linkHub->mainState();
+        const bool active = linkHub->tracksActive();
+        const auto depth  = [&] (LinkHub::Effect e)
+        {
+            return active ? main.depths[(size_t) e].load() * param (trackEffect (e)) : 0.0f;
+        };
+
+        engine.setAmount      (active ? main.amount.load() : 0.0f);
+        engine.setHpfDepth    (depth (LinkHub::Effect::hpf));
+        engine.setReverbDepth (depth (LinkHub::Effect::reverb));
+        engine.setDelayDepth  (depth (LinkHub::Effect::delay));
+        engine.setRiserDepth  (0.0f);
+    }
+    else
+    {
+        // The main applying to selected tracks leaves high-pass, reverb and
+        // delay to them and adds only the riser to the mix. Any other MAIN
+        // (or this one on ALL TRACKS) processes everything it receives.
+        const bool tracksDoTheRest = isLinkMain() && appliesToSelectedTracks();
+        if (isLinkMain())
+            publishMainState();
+
+        engine.setAmount      (param (ParamID::amount));
+        engine.setHpfDepth    (tracksDoTheRest ? 0.0f : param (ParamID::hpfDepth));
+        engine.setReverbDepth (tracksDoTheRest ? 0.0f : param (ParamID::reverbDepth));
+        engine.setDelayDepth  (tracksDoTheRest ? 0.0f : param (ParamID::delayDepth));
+        engine.setRiserDepth  (param (ParamID::riserDepth));
+    }
 
     engine.process (buffer);
 }
@@ -173,6 +272,7 @@ void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInByt
     const auto sample = state.getChildWithName (riserStateTag);
     state.removeChild (sample, nullptr);
     apvts.replaceState (state);
+    updateLink();   // the restored role may differ
 
     juce::MemoryBlock fileData;
     if (sample.isValid() && fileData.fromBase64Encoding (sample["data"].toString())
@@ -262,6 +362,117 @@ void PreDropAudioProcessor::sendRiserToEngine()
 void PreDropAudioProcessor::timerCallback()
 {
     engine.collectRetiredRiserSamples();
+    updateLink();
+}
+
+// --- Linking -------------------------------------------------------------------
+
+PreDropAudioProcessor::Role PreDropAudioProcessor::getRole() const noexcept
+{
+    return (Role) juce::jlimit (0, 2, juce::roundToInt (apvts.getRawParameterValue (ParamID::role)->load()));
+}
+
+void PreDropAudioProcessor::setRole (Role newRole)
+{
+    auto* p = apvts.getParameter (ParamID::role);
+    p->setValueNotifyingHost (p->convertTo0to1 ((float) (int) newRole));
+    updateLink();
+}
+
+bool PreDropAudioProcessor::appliesToSelectedTracks() const noexcept
+{
+    return apvts.getRawParameterValue (ParamID::scope)->load() > 0.5f;
+}
+
+void PreDropAudioProcessor::setAppliesToSelectedTracks (bool selectedOnly)
+{
+    auto* p = apvts.getParameter (ParamID::scope);
+    p->setValueNotifyingHost (p->convertTo0to1 (selectedOnly ? 1.0f : 0.0f));
+    publishMainState();
+}
+
+void PreDropAudioProcessor::parameterChanged (const juce::String&, float)
+{
+    publishMainState();   // atomic stores only: fine on whichever thread calls
+}
+
+void PreDropAudioProcessor::updateLink()
+{
+    const auto role = getRole();
+
+    if (const bool track = role == Role::track; track != link.registered)
+    {
+        if (track) linkHub->addTrack (this);
+        else       linkHub->removeTrack (this);
+        link.registered = track;
+    }
+
+    if (const bool ret = role == Role::returnTrack; ret != link.registeredReturn)
+    {
+        if (ret) linkHub->addReturn (this);
+        else     linkHub->removeReturn (this);
+        link.registeredReturn = ret;
+    }
+
+    if (role == Role::main)
+        linkHub->claimMain (this);   // no-op while another instance is the main
+    else
+        linkHub->releaseMain (this);
+
+    publishMainState();
+}
+
+void PreDropAudioProcessor::publishMainState() noexcept
+{
+    if (! isLinkMain())
+        return;
+
+    auto& main = linkHub->mainState();
+    const auto param = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+    main.amount.store (param (ParamID::amount));
+    main.depths[(size_t) LinkHub::Effect::hpf].store    (param (ParamID::hpfDepth));
+    main.depths[(size_t) LinkHub::Effect::reverb].store (param (ParamID::reverbDepth));
+    main.depths[(size_t) LinkHub::Effect::delay].store  (param (ParamID::delayDepth));
+    main.selectedTracksOnly.store (appliesToSelectedTracks());
+}
+
+juce::String PreDropAudioProcessor::getTrackName() const
+{
+    if (const auto typed = apvts.state[trackNameTag].toString(); typed.isNotEmpty())
+        return typed;
+
+    {
+        const juce::ScopedLock lock (link.lock);
+        if (link.hostName.isNotEmpty())
+            return link.hostName;
+    }
+
+    const int index = linkHub->indexOf (this);
+    return index >= 0 ? "Track " + juce::String (index + 1) : juce::String ("Track");
+}
+
+void PreDropAudioProcessor::setTrackName (const juce::String& name)
+{
+    apvts.state.setProperty (trackNameTag, name.trim(), nullptr);
+}
+
+float PreDropAudioProcessor::getLinkLevel (LinkHub::Effect effect) const
+{
+    return apvts.getRawParameterValue (trackEffect (effect))->load();
+}
+
+void PreDropAudioProcessor::setLinkLevel (LinkHub::Effect effect, float level)
+{
+    auto* p = apvts.getParameter (trackEffect (effect));
+    p->beginChangeGesture();
+    p->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, level));
+    p->endChangeGesture();
+}
+
+void PreDropAudioProcessor::updateTrackProperties (const TrackProperties& properties)
+{
+    const juce::ScopedLock lock (link.lock);
+    link.hostName = properties.name;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

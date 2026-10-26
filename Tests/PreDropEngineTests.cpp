@@ -456,6 +456,157 @@ void testRiserSample()
     check (finite, "swapping riser samples while running keeps the output finite");
 }
 
+// ---- Test 3e: effects settled at "off" are skipped: bit-exact pass-through. ----
+void testIdleEffectsPassThrough()
+{
+    std::printf ("Idle effects:\n");
+
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+    PreDropEngine engine;
+    engine.prepare (sr, 2, block);
+
+    const auto runBlocks = [&] (int count, float amount)
+    {
+        engine.setAmount (amount);
+        float maxDiff = 0.0f;
+        bool finite = true;
+        for (int b = 0; b < count; ++b)
+        {
+            const auto in = makeSine (sr, 110.0, block);
+            auto buffer = in;
+            engine.process (buffer);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < block; ++n)
+                {
+                    finite = finite && std::isfinite (buffer.getSample (ch, n));
+                    maxDiff = std::max (maxDiff, std::abs (buffer.getSample (ch, n) - in.getSample (ch, n)));
+                }
+        }
+        return std::pair { maxDiff, finite };
+    };
+
+    check (runBlocks (20, 0.0f).first == 0.0f, "at Amount 0 the output is bit-identical to the input");
+
+    const auto [active, finite] = runBlocks (40, 1.0f);
+    check (finite && active > 0.05f, "building up re-engages every effect from idle");
+
+    runBlocks (10, 0.0f);   // let the 40 ms ramps settle back to off
+    check (runBlocks (20, 0.0f).first == 0.0f, "back at Amount 0 it is bit-identical again once settled");
+
+    // A linked track with nothing switched on: Amount up, every depth at 0.
+    engine.setHpfDepth (0.0f);
+    engine.setReverbDepth (0.0f);
+    engine.setDelayDepth (0.0f);
+    engine.setRiserDepth (0.0f);
+    runBlocks (10, 1.0f);
+    check (runBlocks (20, 1.0f).first == 0.0f, "with every depth at 0 the output is bit-identical at full Amount");
+}
+
+// ---- Test 3f: the high-pass fades in and out of idle without a click. --------
+void testHpfIdleTransitionsAreSmooth()
+{
+    std::printf ("High-pass idle transitions:\n");
+
+    // A 40 Hz bass line, where even a parked 20 Hz high-pass shifts the phase
+    // by tens of degrees: switching straight between filtered and dry would
+    // jump by a large fraction of the amplitude in one sample.
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+    constexpr double freq = 40.0;
+    PreDropEngine engine;
+    engine.setReverbDepth (0.0f);
+    engine.setDelayDepth (0.0f);
+    engine.setRiserDepth (0.0f);
+    engine.prepare (sr, 1, block);
+
+    long sampleIndex = 0;
+    float previous = 0.0f;
+    const auto largestStep = [&] (int blocks, float amount)
+    {
+        engine.setAmount (amount);
+        float largest = 0.0f;
+        for (int b = 0; b < blocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (1, block);
+            for (int n = 0; n < block; ++n, ++sampleIndex)
+                buffer.setSample (0, n, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * freq * (double) sampleIndex / sr));
+            engine.process (buffer);
+            for (int n = 0; n < block; ++n)
+            {
+                largest = std::max (largest, std::abs (buffer.getSample (0, n) - previous));
+                previous = buffer.getSample (0, n);
+            }
+        }
+        return largest;
+    };
+
+    largestStep (20, 0.0f);                                   // settled dry, high-pass idle
+    const float natural = (float) (0.5 * juce::MathConstants<double>::twoPi * freq / sr);
+    const float engage  = largestStep (20, 0.05f);            // HPF to ~24 Hz: blends in
+    const float release = largestStep (40, 0.0f);             // back to 20 Hz: blends out, then idles
+
+    check (engage < natural * 2.0f, "engaging the high-pass on a bass line is click-free (largest step "
+                                       + std::to_string (engage / natural).substr (0, 4) + "x the tone's own)");
+    check (release < natural * 2.0f, "parking the high-pass on a bass line is click-free (largest step "
+                                        + std::to_string (release / natural).substr (0, 4) + "x the tone's own)");
+}
+
+// ---- Test 3g: wet only (for a return track) drops the dry signal exactly. -----
+void testWetOnly()
+{
+    std::printf ("Wet-only output:\n");
+
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+
+    // Same input through a normal and a wet-only engine; with the high-pass and
+    // riser out of the way the normal output is input + effects, so the two
+    // must differ by exactly the input.
+    const auto run = [&] (bool wetOnly, float amount, float reverb, float delay, float& maxAbs)
+    {
+        PreDropEngine engine;
+        engine.setHpfDepth (0.0f);
+        engine.setRiserDepth (0.0f);
+        engine.setReverbDepth (reverb);
+        engine.setDelayDepth (delay);
+        engine.setWetOnly (wetOnly);
+        engine.setAmount (amount);
+        engine.prepare (sr, 2, block);
+        std::vector<float> out;
+        maxAbs = 0.0f;
+        for (int b = 0; b < 60; ++b)
+        {
+            auto buffer = makeSine (sr, 330.0, block);
+            engine.process (buffer);
+            for (int n = 0; n < block; ++n)
+            {
+                out.push_back (buffer.getSample (0, n));
+                maxAbs = std::max (maxAbs, std::abs (buffer.getSample (0, n)));
+            }
+        }
+        return out;
+    };
+
+    float peak = 0.0f;
+    run (true, 0.0f, 0.5f, 0.5f, peak);
+    check (peak == 0.0f, "at Amount 0 a wet-only engine is silent (no dry leaks through)");
+
+    run (true, 1.0f, 0.0f, 0.0f, peak);
+    check (peak == 0.0f, "with reverb and delay at 0 a wet-only engine stays silent at full Amount");
+
+    float normalPeak = 0.0f, wetPeak = 0.0f;
+    const auto normal = run (false, 1.0f, 0.5f, 0.5f, normalPeak);
+    const auto wet    = run (true,  1.0f, 0.5f, 0.5f, wetPeak);
+    const auto dry = makeSine (sr, 330.0, block);   // every block carries this same input
+    const auto input = [&] (size_t i) { return dry.getSample (0, (int) (i % (size_t) block)); };
+    float worst = 0.0f;
+    for (size_t i = 0; i < normal.size(); ++i)
+        worst = std::max (worst, std::abs ((normal[i] - input (i)) - wet[i]));
+    check (wetPeak > 0.05f && worst < 1.0e-4f, "wet only is exactly the normal output minus the dry signal (largest difference "
+                                                 + std::to_string (worst) + ")");
+}
+
 // ---- Test 3c: degenerate blocks are a safe no-op. ------------------------------
 void testEmptyBlocks()
 {
@@ -514,6 +665,9 @@ int main()
     testStabilityAtFull();
     testEffectsInSync();
     testRiserSample();
+    testIdleEffectsPassThrough();
+    testHpfIdleTransitionsAreSmooth();
+    testWetOnly();
     testEmptyBlocks();
     testVisualModelMatchesEngine();
 
