@@ -1842,15 +1842,28 @@ void testPresets()
         pill->saveAs ("From The Pill");
         check (presets.fileFor ("From The Pill").existsAsFile() && presets.getCurrentName() == "From The Pill", "the pill saves under a new name");
 
-        // Save preset...'s dialog, built without showing it (CI has no window manager).
-        auto& dialog = pill->startNaming();
-        check (dialog.getTextEditorContents ("name") == "From The Pill", "Save preset... asks for a name, offering the current one");
-        dialog.getTextEditor ("name")->setText ("Typed Name");
-        pill->finishNaming (1);
-        check (presets.fileFor ("Typed Name").existsAsFile() && presets.getCurrentName() == "Typed Name", "and saves under the name typed");
-        pill->startNaming().getTextEditor ("name")->setText ("Cancelled");
+        // Save preset... asks for a name over the editor.
+        pill->choose (PresetButton::saveId);
+        auto* prompt = pill->getPrompt();
+        check (prompt != nullptr && prompt->getParentComponent() == editor.get() && prompt->getBounds() == editor->getLocalBounds()
+                 && prompt->field().getText() == "From The Pill" && prompt->save().getButtonText() == "REPLACE",
+               "Save preset... asks for a name over the editor, offering the current one (to REPLACE)");
+        if (prompt != nullptr)
+        {
+            check (hasDetail (render (*prompt)), "the prompt renders");
+            prompt->field().setText ("  ");   // its change message arrives asynchronously
+            check (pumpUntil ([&] { return ! prompt->save().isEnabled(); }), "a blank name can't be saved");
+            prompt->field().setText ("Typed Name");
+            check (pumpUntil ([&] { return prompt->save().getButtonText() == "SAVE" && prompt->save().isEnabled(); }),
+                   "a new name is saved, not replaced");
+            prompt->save().triggerClick();
+            check (pumpUntil ([&] { return presets.fileFor ("Typed Name").existsAsFile(); }) && pill->getPrompt() == nullptr
+                     && presets.getCurrentName() == "Typed Name",
+                   "SAVE saves under the name typed and closes the prompt");
+        }
+        pill->startNaming().field().setText ("Cancelled", juce::dontSendNotification);
         pill->finishNaming (0);
-        check (! presets.fileFor ("Cancelled").existsAsFile(), "Cancel saves nothing");
+        check (! presets.fileFor ("Cancelled").existsAsFile() && pill->getPrompt() == nullptr, "Cancel saves nothing");
 
         setParam (p, "role", 1.0f);
         check (pumpUntil ([&] { return ! pill->isVisible(); }), "a TRACK has no presets (its sound is the main's)");

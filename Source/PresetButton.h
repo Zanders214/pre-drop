@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <cmath>
+#include <functional>
 #include <memory>
 
 #include "PluginProcessor.h"
@@ -8,10 +10,129 @@
 #include "PreDropTheme.h"
 
 /**
+    PresetNamePrompt: asks for a preset's name, over the editor (drawn inside
+    it rather than as a window of its own, which a plug-in's host could put
+    behind itself). Return saves, Escape cancels; SAVE reads REPLACE when a
+    preset of that name exists.
+*/
+class PresetNamePrompt final : public juce::Component
+{
+public:
+    PresetNamePrompt (const PresetManager& p, const juce::String& name, juce::LookAndFeel& pills) : presets (p)
+    {
+        using namespace PreDrop;
+        nameField.setText (name, false);
+        nameField.setSelectAllWhenFocused (true);
+        nameField.setColour (juce::TextEditor::backgroundColourId, Palette::panelBottom);
+        nameField.setColour (juce::TextEditor::textColourId, Palette::textStrong);
+        nameField.setColour (juce::TextEditor::outlineColourId, Palette::hairline);
+        nameField.setColour (juce::TextEditor::focusedOutlineColourId, Palette::badge);
+        nameField.setColour (juce::CaretComponent::caretColourId, Palette::textStrong);
+        nameField.onReturnKey = [this] { finish (1); };
+        nameField.onEscapeKey = [this] { finish (0); };
+        nameField.onTextChange = [this] { update(); };
+        addAndMakeVisible (nameField);
+
+        for (auto* b : { &saveButton, &cancelButton })
+        {
+            b->setLookAndFeel (&pills);
+            PreDropLookAndFeel::setCompactPill (*b);
+            addAndMakeVisible (*b);
+        }
+        cancelButton.setButtonText ("CANCEL");
+        cancelButton.onClick = [this] { finish (0); };
+        saveButton.onClick   = [this] { finish (1); };
+        update();
+    }
+
+    ~PresetNamePrompt() override
+    {
+        for (auto* b : { &saveButton, &cancelButton })
+            b->setLookAndFeel (nullptr);
+    }
+
+    /** Called with 1 to save, 0 to cancel. */
+    std::function<void (int)> onFinish;
+
+    juce::TextEditor& field() noexcept       { return nameField; }
+    juce::TextButton& save() noexcept        { return saveButton; }
+
+    void focus()
+    {
+        if (isShowing())
+            nameField.grabKeyboardFocus();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        using namespace PreDrop;
+        const float s = scale();
+        g.fillAll (juce::Colours::black.withAlpha (0.6f));
+        g.setColour (Palette::panelTop);
+        g.fillRoundedRectangle (panel.toFloat(), 12.0f * s);
+        g.setColour (Palette::hairline);
+        g.drawRoundedRectangle (panel.toFloat(), 12.0f * s, juce::jmax (1.0f, s));
+        g.setFont (Fonts::sans (10.0f * s, true, 0.12f));
+        g.setColour (Palette::textMid);
+        g.drawText ("SAVE PRESET", titleArea.toFloat(), juce::Justification::centredLeft, false);
+    }
+
+    void resized() override
+    {
+        const float s = scale();
+        const auto px = [s] (float v) { return (int) std::round (v * s); };
+        panel = getLocalBounds().withSizeKeepingCentre (px (260.0f), px (104.0f));
+        auto area = panel.reduced (px (14.0f), px (12.0f));
+        titleArea = area.removeFromTop (px (14.0f));
+        area.removeFromTop (px (8.0f));
+        nameField.setFont (PreDrop::Fonts::sans (13.0f * s, false, 0.0f));
+        nameField.setBounds (area.removeFromTop (px (26.0f)));
+        area.removeFromTop (px (10.0f));
+        auto row = area.removeFromTop (px (16.0f));
+        saveButton.setBounds (row.removeFromRight (px (84.0f)));
+        row.removeFromRight (px (8.0f));
+        cancelButton.setBounds (row.removeFromRight (px (84.0f)));
+    }
+
+    void parentSizeChanged() override
+    {
+        if (auto* parent = getParentComponent())
+            setBounds (parent->getLocalBounds());
+    }
+
+private:
+    float scale() const noexcept { return (float) getWidth() / 360.0f; }
+
+    void update()
+    {
+        const auto name = nameField.getText().trim();
+        saveButton.setButtonText (name.isNotEmpty() && presets.fileFor (name).existsAsFile() ? "REPLACE" : "SAVE");
+        saveButton.setEnabled (juce::File::createLegalFileName (name).isNotEmpty());
+    }
+
+    void finish (int result)
+    {
+        if (result == 1 && ! saveButton.isEnabled())
+            return;
+        if (onFinish != nullptr)
+            onFinish (result);   // deletes this
+    }
+
+    const PresetManager& presets;
+    juce::TextEditor     nameField;
+    juce::TextButton     saveButton;
+    juce::TextButton     cancelButton;
+    juce::Rectangle<int> panel;
+    juce::Rectangle<int> titleArea;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PresetNamePrompt)
+};
+
+/**
     PresetButton: the header's preset pill. It shows the preset last saved or
     loaded (PRESETS before there is one) and opens a menu: the saved presets,
-    Save preset... (asks for a name), Export... and Import... (any .predrop
-    file, kept in the presets folder too) and the folder itself.
+    Save preset... (asks for a name over the editor), Export... and Import...
+    (any .predrop file, kept in the presets folder too) and the folder itself.
 */
 class PresetButton final : public juce::TextButton
 {
@@ -80,7 +201,7 @@ public:
     void choose (int itemId)
     {
         if (itemId == saveId)
-            askForName();
+            startNaming();
         else if (itemId == exportId)
             chooseExportFile();
         else if (itemId == importId)
@@ -92,50 +213,37 @@ public:
         refresh();
     }
 
-    /** Saves under `name`, after asking before replacing a preset of that name. */
+    /** Saves under `name` (replacing a preset of that name). */
     void saveAs (const juce::String& name)
     {
-        if (! presets.fileFor (name).existsAsFile() || name.trim().isEmpty())
-        {
-            report (presets.save (name), "Couldn't save the preset");
-            refresh();
-            return;
-        }
-
-        const auto options = juce::MessageBoxOptions::makeOptionsOkCancel (
-            juce::MessageBoxIconType::QuestionIcon, "Replace " + name.trim() + "?",
-            "A preset with that name exists. Replace it with this sound?", "Replace", "Cancel", this);
-        juce::AlertWindow::showAsync (options, [safe = juce::Component::SafePointer (this), name] (int result)
-        {
-            if (safe != nullptr && result == 1)
-            {
-                safe->report (safe->presets.save (name), "Couldn't save the preset");
-                safe->refresh();
-            }
-        });
+        report (presets.save (name), "Couldn't save the preset");
+        refresh();
     }
 
-    /** Builds the name dialog, offering the current name (askForName() shows
-        it); finishNaming() closes it, saving on 1. Apart for tests, which
-        can't put a window on a screen-less runner. */
-    juce::AlertWindow& startNaming()
+    /** Opens the name prompt over the editor, offering the current name;
+        finishNaming() closes it, saving on 1. */
+    PresetNamePrompt& startNaming()
     {
-        nameDialog = std::make_unique<juce::AlertWindow> ("Save preset", "Name this sound:", juce::MessageBoxIconType::NoIcon, this);
-        nameDialog->addTextEditor ("name", shownName);
-        nameDialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        nameDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        return *nameDialog;
+        auto* editor = getTopLevelComponent();
+        prompt = std::make_unique<PresetNamePrompt> (presets, shownName, getLookAndFeel());
+        prompt->onFinish = [this] (int result) { finishNaming (result); };
+        editor->addAndMakeVisible (*prompt);
+        prompt->setBounds (editor->getLocalBounds());
+        prompt->focus();
+        return *prompt;
     }
 
     void finishNaming (int result)
     {
-        if (nameDialog == nullptr)
+        if (prompt == nullptr)
             return;
-        const auto name = nameDialog->getTextEditorContents ("name");
-        nameDialog.reset();
+        const auto name = prompt->field().getText();
+        prompt.reset();
         if (result == 1)
             saveAs (name);
     }
+
+    PresetNamePrompt* getPrompt() noexcept { return prompt.get(); }
 
 private:
     void fitLabel()
@@ -153,15 +261,6 @@ private:
             if (safe != nullptr && choice > 0)
                 safe->choose (choice);
         });
-    }
-
-    void askForName()
-    {
-        startNaming().enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer (this)] (int result)
-        {
-            if (safe != nullptr)
-                safe->finishNaming (result);
-        }), false);
     }
 
     void chooseExportFile()
@@ -202,7 +301,7 @@ private:
 
     PresetManager&                     presets;
     juce::Array<juce::File>            listed;
-    std::unique_ptr<juce::AlertWindow> nameDialog;
+    std::unique_ptr<PresetNamePrompt>  prompt;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String                       shownName { "?" };   // forces the first label
 
