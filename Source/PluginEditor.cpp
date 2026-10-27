@@ -641,8 +641,10 @@ void PreDropAudioProcessorEditor::resized()
             depthSliders[i].setBounds (col.removeFromTop (dialSize)
                                           .withSizeKeepingCentre (dialSize, dialSize));
             col.removeFromTop (textBlock + pillGap);
+            // Pills reach into the gaps between columns (a little apart from
+            // each other) so a warning like 100% WET? fits in wider fonts too.
             if (sources[i] != nullptr)
-                sources[i]->setBounds (col.removeFromTop (pillH));
+                sources[i]->setBounds (col.removeFromTop (pillH).withSizeKeepingCentre (colW + kGap - px (4.0f), pillH));
         }
         fitRiserLabel();
     }
