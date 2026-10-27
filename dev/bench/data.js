@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793103389111,
+  "lastUpdate": 1793105392733,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -543,6 +543,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.349,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4db36380b8b09d6332dba2a47e0d69cf7c26c8c6",
+          "message": "Merge pull request #20 from Zanders214/claude/sonar-new-code\n\nClear SonarCloud's 57 open issues",
+          "timestamp": "2026-10-27T13:48:19+01:00",
+          "tree_id": "38612fe0f3660260de757ffc801c273edf13b77a",
+          "url": "https://github.com/Zanders214/pre-drop/commit/4db36380b8b09d6332dba2a47e0d69cf7c26c8c6"
+        },
+        "date": 1793105392062,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 52041.709,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.488,
             "unit": "%"
           }
         ]
