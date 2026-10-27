@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -219,7 +220,7 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 11, "eleven parameters are exposed");
+    check (p.getParameters().size() == 11 + EffectSettings::count, "26 parameters are exposed (11, and the effects' settings)");
     check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
@@ -404,15 +405,16 @@ void testEditor()
     pumpMessages (60);
     check (button->getToggleState() && ! curve->isVisible(), "EFFECTS opens the depth panel in place of the curve");
 
-    // Under the REVERB, DELAY and RISER knobs: what each one uses (built-in or
-    // a plug-in; noise or a sample), shown only with the panel.
+    // Under each knob: what the effect uses (built-in or a plug-in; noise or a
+    // sample; the high-pass's slope), shown only with the panel.
     std::vector<juce::Component*> sources;
     for (auto* pill : findChildren<EffectSlotButton> (*editor))
         sources.push_back (pill);
-    for (auto* b : findChildren<juce::TextButton> (*editor))
-        if (b->getComponentID() == "riserSource")
-            sources.push_back (b);
-    bool underKnobs = sources.size() == 3;
+    for (const auto* id : { "riserSource", "hpfSource" })
+        for (auto* b : findChildren<juce::TextButton> (*editor))
+            if (b->getComponentID() == id)
+                sources.push_back (b);
+    bool underKnobs = sources.size() == 4;
     for (size_t i = 0; underKnobs && i < sources.size(); ++i)
     {
         const auto pill = sources[i]->getBounds();
@@ -1601,6 +1603,382 @@ void testButtonStates()
     check (PreDrop::Format::hertz (800.0f) == "800 Hz", "cutoff readout in Hz");
     check (PreDrop::Format::hertz (2500.0f) == "2.50 kHz", "cutoff readout switches to kHz");
 }
+void testEffectViews()
+{
+    std::printf ("REVERB, DELAY and HIGH-PASS views:\n");
+
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    const auto views = findChildren<EffectView> (*editor);
+    const auto slots = findChildren<EffectSlotButton> (*editor);
+    juce::TextButton* effects = nullptr;
+    juce::TextButton* tracks  = nullptr;
+    juce::TextButton* hpfPill = nullptr;
+    for (auto* b : findChildren<juce::TextButton> (*editor))
+    {
+        if (b->getButtonText() == "EFFECTS") effects = b;
+        if (b->getButtonText() == "TRACKS")  tracks  = b;
+        if (b->getComponentID() == "hpfSource") hpfPill = b;
+    }
+    check (views.size() == 3 && slots.size() == 2 && effects != nullptr && tracks != nullptr && hpfPill != nullptr,
+           "the editor has the three views and the pills that open them");
+    if (views.size() != 3 || slots.size() != 2 || effects == nullptr || tracks == nullptr || hpfPill == nullptr)
+        return;
+    auto& reverb = *views[0];
+    auto& delay  = *views[1];
+    auto& hpf    = *views[2];
+
+    effects->triggerClick();
+    pumpMessages (30);
+    check (hpfPill->isVisible() && hpfPill->getButtonText() == "12 dB" && ! hpfPill->getToggleState(),
+           "the high-pass's pill shows its gentle slope");
+
+    // REVERB: its pill opens the view, over the button row; BACK returns.
+    slots[0]->triggerClick();
+    pumpMessages (30);
+    check (reverb.isVisible() && ! effects->isVisible() && ! tracks->isVisible() && reverb.getY() <= effects->getY(),
+           "the reverb's pill opens the REVERB view, over the button row");
+    check (reverb.knob (EffectSettings::reverbSize) != nullptr && reverb.knob (EffectSettings::reverbPreDelay) != nullptr
+             && reverb.knob (EffectSettings::delayTime) == nullptr && reverb.sourcePill() != nullptr,
+           "it has the reverb's knobs and its source");
+    check (reverb.knob (EffectSettings::reverbSize)->valueText() == "95%" && hasDetail (render (reverb)), "the view renders, with its values");
+    reverb.knob (EffectSettings::reverbDamping)->slider().setValue (0.8, juce::sendNotificationSync);
+    check (approx (param (p, "reverbDamping"), 0.8f, 1.0e-4f), "a knob sets its parameter");
+    check (approx (p.getEffectSettings()[EffectSettings::reverbDamping], 0.8f, 1.0e-4f), "which the processor reads");
+    reverb.back().triggerClick();
+    pumpMessages (30);
+    check (! reverb.isVisible() && effects->isVisible() && effects->getToggleState(), "BACK returns to EFFECTS");
+
+    // DELAY: SYNC picks the note or the milliseconds.
+    slots[1]->triggerClick();
+    pumpMessages (30);
+    check (delay.isVisible() && delay.sync().getToggleState() && delay.knob (EffectSettings::delayNote)->isVisible()
+             && ! delay.knob (EffectSettings::delayTime)->isVisible(),
+           "the DELAY view starts synced, with the note");
+    check (delay.getNote().contains ("ms") && delay.getNote().contains ("120 BPM"), "it says how long the echoes are (at 120 BPM with no tempo)");
+    delay.sync().triggerClick();
+    pumpMessages (30);
+    delay.refresh();
+    check (param (p, "delaySync") < 0.5f && delay.knob (EffectSettings::delayTime)->isVisible()
+             && ! delay.knob (EffectSettings::delayNote)->isVisible(),
+           "SYNC off shows the milliseconds");
+    delay.pingPong().triggerClick();
+    pumpMessages (30);
+    check (param (p, "delayPingPong") > 0.5f && delay.pingPong().getToggleState(), "PING-PONG switches on");
+    check (hasDetail (render (delay)), "the delay view renders");
+
+    // A plug-in in the slot: the built-in's settings are dimmed.
+    p.getEffectPlugins().load (PreDropAudioProcessor::EffectSlot::delay, juce::File (PREDROP_TEST_VST3));
+    delay.refresh();
+    check (! delay.usesBuiltIn() && ! delay.knob (EffectSettings::delayFeedback)->isEnabled() && delay.getNote().contains ("plug-in"),
+           "with a plug-in as the delay its built-in settings are dimmed");
+    check (hasDetail (render (delay)), "and the view still renders");
+    p.getEffectPlugins().useBuiltIn (PreDropAudioProcessor::EffectSlot::delay);
+    delay.refresh();
+    check (delay.usesBuiltIn() && delay.knob (EffectSettings::delayFeedback)->isEnabled(), "back to the built-in they apply again");
+    delay.back().triggerClick();
+    pumpMessages (30);
+
+    // HIGH-PASS: the slope pill, and the pill in EFFECTS follows it.
+    hpfPill->triggerClick();
+    pumpMessages (30);
+    check (hpf.isVisible() && hpf.sourcePill() == nullptr && hpf.knob (EffectSettings::hpfResonance) != nullptr,
+           "the high-pass's pill opens its view (no source to choose)");
+    hpf.slope().triggerClick();
+    pumpMessages (30);
+    check (param (p, "hpfSlope") > 0.5f && p.getEffectSettings().hpfSteep(), "its slope pill switches to 24 dB");
+    check (hasDetail (render (hpf)), "the high-pass view renders");
+    hpf.back().triggerClick();
+    check (pumpUntil ([&] { return hpfPill->getButtonText() == "24 dB" && hpfPill->getToggleState(); }),
+           "the pill in EFFECTS says 24 dB, lit");
+    setParam (p, "hpfResonance", 0.5f);
+    check (pumpUntil ([&] { return hpfPill->getButtonText().contains ("RES"); }), "and notes the resonance");
+
+    // The RISER view's noise knobs, while there is no sample.
+    auto* riserView = findChild<RiserView> (*editor);
+    if (riserView != nullptr)
+    {
+        auto* start = riserView->noiseKnob (EffectSettings::riserStart);
+        check (start != nullptr && start->isVisible() && riserView->noiseKnob (EffectSettings::riserResonance) != nullptr,
+               "the RISER view shows the noise's START, END and RESONANCE");
+        const auto file = writeWav ("predrop view settings riser.wav", 48000.0, 2.0, 2);
+        riserView->loadFile (file);
+        check (start != nullptr && ! start->isVisible() && riserView->wave().isVisible(), "a sample replaces them with its waveform");
+        p.getRiser().clear();
+        riserView->refresh();
+        check (start != nullptr && start->isVisible(), "and the noise brings them back");
+    }
+}
+void testPresets()
+{
+    std::printf ("Presets:\n");
+
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-preset-tests");
+    root.deleteRecursively();
+    const auto folder = root.getChildFile ("Presets");
+
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    auto& presets = p.getPresets();
+    check (PresetManager::defaultFolder().getFullPathName().contains ("PreDrop"), "presets have a home folder");
+    presets.setFolder (folder);
+    check (presets.getPresets().isEmpty() && presets.getCurrentName().isEmpty(), "there are none to start with");
+
+    // The sound to keep, and what isn't part of it.
+    const auto sample = writeWav ("predrop preset riser.wav", 48000.0, 1.0, 2);
+    setParam (p, "reverbDepth", 0.8f);
+    setParam (p, "mix", 0.6f);
+    setParam (p, "delayFeedback", 0.3f);
+    setParam (p, "delaySync", 0.0f);
+    setParam (p, "amount", 0.7f);
+    setParam (p, "trackReverb", 0.4f);
+    p.getRiser().load (sample);
+    auto timing = p.getRiser().getTiming();
+    timing.loopBars = 3;
+    p.getRiser().setTiming (timing);
+
+    check (presets.save ("  ").isNotEmpty(), "a preset needs a name");
+    check (presets.save ("My Wash").isEmpty() && presets.fileFor ("My Wash").existsAsFile()
+             && presets.getPresets().size() == 1 && presets.getCurrentName() == "My Wash",
+           "saving writes My Wash.predrop into the folder and names the sound");
+    const auto captured = presets.capture();
+    check (! captured.getChildWithProperty ("id", "amount").isValid() && ! captured.getChildWithProperty ("id", "role").isValid()
+             && ! captured.getChildWithProperty ("id", "trackReverb").isValid()
+             && captured.getChildWithProperty ("id", "reverbSize").isValid(),
+           "a preset leaves out Amount, the role and the track levels");
+
+    // Change it all, then load it back.
+    setParam (p, "reverbDepth", 0.1f);
+    setParam (p, "mix", 1.0f);
+    setParam (p, "delayFeedback", 0.6f);
+    setParam (p, "delaySync", 1.0f);
+    setParam (p, "amount", 0.2f);
+    setParam (p, "trackReverb", 0.9f);
+    p.getRiser().clear();
+    check (presets.load (presets.fileFor ("My Wash")).isEmpty(), "the preset loads");
+    check (approx (param (p, "reverbDepth"), 0.8f, 1.0e-3f) && approx (param (p, "mix"), 0.6f, 1.0e-3f)
+             && approx (param (p, "delayFeedback"), 0.3f, 1.0e-3f) && param (p, "delaySync") < 0.5f,
+           "it brings back the depths, Mix and the effects' settings");
+    check (p.getRiser().getName() == sample.getFileName() && p.getRiser().getTiming().loopBars == 3,
+           "and the riser sample with its timing");
+    check (approx (param (p, "amount"), 0.2f, 1.0e-3f) && approx (param (p, "trackReverb"), 0.9f, 1.0e-3f),
+           "leaving Amount and the track levels where they were");
+
+    // A preset from before a setting existed: that setting goes to its default.
+    const auto older = root.getChildFile ("Older.predrop");
+    older.replaceWithText ("<PREDROP_PRESET version=\"1\"><PARAM id=\"mix\" value=\"0.5\"/></PREDROP_PRESET>");
+    check (presets.load (older).isEmpty() && approx (param (p, "mix"), 0.5f, 1.0e-3f)
+             && approx (param (p, "reverbDepth"), 0.5f, 1.0e-3f) && param (p, "delaySync") > 0.5f
+             && p.getRiser().getName().isEmpty(),
+           "what a preset doesn't mention returns to its default (and the noise riser)");
+
+    const auto junk = root.getChildFile ("Junk.predrop");
+    junk.replaceWithText ("not a preset");
+    check (presets.load (junk).contains ("isn't a PreDrop preset") && presets.getCurrentName() == "Older"
+             && approx (param (p, "mix"), 0.5f, 1.0e-3f),
+           "a file that isn't a preset is refused, changing nothing");
+    check (presets.importFrom (junk).isNotEmpty(), "and isn't imported");
+
+    // Export anywhere; import copies into the folder (once).
+    presets.load (presets.fileFor ("My Wash"));
+    const auto exported = root.getChildFile ("Out/Shared Wash");
+    exported.getParentDirectory().createDirectory();
+    check (presets.exportTo (exported).isEmpty() && exported.withFileExtension (".predrop").existsAsFile(),
+           "exporting writes a .predrop file wherever it's put");
+    presets.fileFor ("My Wash").deleteFile();
+    check (presets.importFrom (exported.withFileExtension (".predrop")).isEmpty() && presets.fileFor ("Shared Wash").existsAsFile()
+             && presets.getCurrentName() == "Shared Wash",
+           "importing loads it and keeps a copy in the folder");
+    check (presets.importFrom (exported.withFileExtension (".predrop")).isEmpty() && presets.getPresets().size() == 1,
+           "importing the same file again doesn't copy it twice");
+    setParam (p, "mix", 0.25f);
+    presets.exportTo (exported);
+    check (presets.importFrom (exported.withFileExtension (".predrop")).isEmpty() && presets.getPresets().size() == 2
+             && presets.getCurrentName() == "Shared Wash (2)",
+           "a different preset of the same name is numbered");
+    check (presets.importFrom (presets.fileFor ("Shared Wash")).isEmpty() && presets.getPresets().size() == 2,
+           "importing one already in the folder just loads it");
+
+    // A VST3 reverb travels with the preset, with its state.
+    using Slot = PreDropAudioProcessor::EffectSlot;
+    if (p.getEffectPlugins().load (Slot::reverb, juce::File (PREDROP_TEST_VST3)).isEmpty())
+    {
+        presets.save ("With Plug-in");
+        p.getEffectPlugins().useBuiltIn (Slot::reverb);
+        presets.load (presets.fileFor ("With Plug-in"));
+        check (p.getEffectPlugins().getName (Slot::reverb) == "ZandersPreDrop", "a preset brings back its VST3 reverb");
+        presets.load (presets.fileFor ("Shared Wash"));
+        check (p.getEffectPlugins().getName (Slot::reverb).isEmpty(), "and one without it goes back to the built-in");
+    }
+
+    // The name is kept with the project.
+    presets.load (presets.fileFor ("Shared Wash"));
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    PreDropAudioProcessor restored;
+    restored.setStateInformation (state.getData(), (int) state.getSize());
+    check (restored.getPresets().getCurrentName() == "Shared Wash", "the preset's name is saved with the project");
+
+    // The header's pill.
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    auto* pill = findChild<PresetButton> (*editor);
+    check (pill != nullptr && pill->isVisible(), "the header has a preset pill");
+    if (pill != nullptr)
+    {
+        check (pill->getButtonText().startsWith ("SHARED"), "it shows the preset's name (" + pill->getButtonText().toStdString() + ")");
+        const auto menu = pill->buildMenu();   // installs PreDrop's own presets too
+        std::vector<std::tuple<int, juce::String, bool>> items;   // id, text, ticked
+        for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+            items.emplace_back (it.getItem().itemID, it.getItem().text, it.getItem().isTicked);
+        const auto idOf = [&items] (const juce::String& text, bool ticked)
+        {
+            for (const auto& [id, itemText, itemTicked] : items)
+                if (itemText == text && itemTicked == ticked)
+                    return id;
+            return 0;
+        };
+        check (idOf ("Shared Wash", true) >= PresetButton::firstPresetId && idOf ("Shared Wash (2)", false) > 0
+                 && idOf ("Dub Throw", false) > 0 && idOf ("Init (the default sound)", false) == PresetButton::initId
+                 && idOf ("Save preset...", false) == PresetButton::saveId && idOf ("Export...", false) == PresetButton::exportId
+                 && idOf ("Import...", false) == PresetButton::importId && idOf ("Show presets folder", false) == PresetButton::folderId,
+               "its menu lists the presets (ticking this one, PreDrop's own among them) with save, export, import and the folder");
+
+        pill->choose (idOf ("Shared Wash (2)", false));
+        check (presets.getCurrentName() == "Shared Wash (2)" && pill->getButtonText().startsWith ("SHARED"), "picking one loads it");
+
+        pill->saveAs ("From The Pill");
+        check (presets.fileFor ("From The Pill").existsAsFile() && presets.getCurrentName() == "From The Pill", "the pill saves under a new name");
+
+        // Save preset... asks for a name over the editor.
+        pill->choose (PresetButton::saveId);
+        auto* prompt = pill->getPrompt();
+        check (prompt != nullptr && prompt->getParentComponent() == editor.get() && prompt->getBounds() == editor->getLocalBounds()
+                 && prompt->field().getText() == "From The Pill" && prompt->save().getButtonText() == "REPLACE",
+               "Save preset... asks for a name over the editor, offering the current one (to REPLACE)");
+        if (prompt != nullptr)
+        {
+            check (hasDetail (render (*prompt)), "the prompt renders");
+            prompt->field().setText ("  ");   // its change message arrives asynchronously
+            check (pumpUntil ([&] { return ! prompt->save().isEnabled(); }), "a blank name can't be saved");
+            prompt->field().setText ("Typed Name");
+            check (pumpUntil ([&] { return prompt->save().getButtonText() == "SAVE" && prompt->save().isEnabled(); }),
+                   "a new name is saved, not replaced");
+            prompt->save().triggerClick();
+            check (pumpUntil ([&] { return presets.fileFor ("Typed Name").existsAsFile(); }) && pill->getPrompt() == nullptr
+                     && presets.getCurrentName() == "Typed Name",
+                   "SAVE saves under the name typed and closes the prompt");
+        }
+        pill->startNaming().field().setText ("Cancelled", juce::dontSendNotification);
+        pill->finishNaming (0);
+        check (! presets.fileFor ("Cancelled").existsAsFile() && pill->getPrompt() == nullptr, "Cancel saves nothing");
+
+        // Init: back to the default sound, leaving Amount and the track levels.
+        setParam (p, "reverbSize", 0.4f);
+        setParam (p, "hpfSlope", 1.0f);
+        setParam (p, "outputTrim", -6.0f);
+        setParam (p, "amount", 0.6f);
+        setParam (p, "trackDelay", 0.3f);
+        p.getRiser().load (sample);
+        p.getEffectPlugins().load (PreDropAudioProcessor::EffectSlot::delay, juce::File (PREDROP_TEST_VST3));
+        pill->choose (PresetButton::initId);
+        check (approx (param (p, "reverbSize"), 0.95f, 1.0e-3f) && param (p, "hpfSlope") < 0.5f
+                 && approx (param (p, "outputTrim"), 0.0f, 1.0e-3f) && approx (param (p, "reverbDepth"), 0.5f, 1.0e-3f)
+                 && approx (param (p, "mix"), 1.0f, 1.0e-3f),
+               "Init puts every setting back to its default");
+        check (p.getRiser().getName().isEmpty() && p.getEffectPlugins().getName (PreDropAudioProcessor::EffectSlot::delay).isEmpty(),
+               "with the noise riser and the built-in effects");
+        check (approx (param (p, "amount"), 0.6f, 1.0e-3f) && approx (param (p, "trackDelay"), 0.3f, 1.0e-3f),
+               "leaving Amount and the track levels where they were");
+        check (presets.getCurrentName().isEmpty() && pill->getButtonText() == "PRESETS", "and naming no preset");
+
+        setParam (p, "role", 1.0f);
+        check (pumpUntil ([&] { return ! pill->isVisible(); }), "a TRACK has no presets (its sound is the main's)");
+        setParam (p, "role", 0.0f);
+        pumpUntil ([&] { return pill->isVisible(); });
+    }
+    editor.reset();
+    root.deleteRecursively();
+}
+void testFactoryPresets()
+{
+    std::printf ("Factory presets:\n");
+
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-factory-tests");
+    folder.deleteRecursively();
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    auto& presets = p.getPresets();
+    presets.setFolder (folder);
+
+    const auto& factory = PresetManager::factoryPresets();
+    bool valid = factory.size() >= 5;
+    for (const auto& preset : factory)
+        for (const auto& [id, value] : preset.values)
+        {
+            auto* parameter = p.getState().getParameter (id);
+            const bool ok = parameter != nullptr && PresetManager::isSoundParameter (id)
+                            && std::abs (parameter->convertFrom0to1 (parameter->convertTo0to1 (value)) - value) <= 1.0e-3f * std::max (1.0f, std::abs (value));
+            if (! ok)
+                std::printf ("    %s: %s = %g\n", preset.name, id, (double) value);
+            valid = valid && ok;
+        }
+    check (valid, "PreDrop comes with " + std::to_string (factory.size()) + " presets, each setting a sound parameter within its range");
+
+    // A user's own preset of a factory name is never replaced.
+    folder.createDirectory();
+    folder.getChildFile ("Dub Throw.predrop").replaceWithText ("mine");
+    check (presets.installFactoryPresets() == (int) factory.size() - 1 && presets.getPresets().size() == (int) factory.size()
+             && folder.getChildFile ("Dub Throw.predrop").loadFileAsString() == "mine",
+           "they're written into the folder, leaving a preset of the same name alone");
+
+    // Once only: one deleted stays deleted.
+    presets.fileFor ("Ambient Swell").deleteFile();
+    check (presets.installFactoryPresets() == 0 && ! presets.fileFor ("Ambient Swell").existsAsFile(), "they're written once: a deleted one stays deleted");
+
+    // Each loads, and builds up without running away: at full Amount on
+    // pink noise the output stays within a few dB of the input.
+    juce::Random random (7);
+    for (const auto& preset : factory)
+    {
+        const auto file = folder.getChildFile ("check.predrop");
+        file.replaceWithText (PresetManager::makePreset (preset).toXmlString());
+        const bool loaded = presets.load (file).isEmpty();
+        setParam (p, "amount", 1.0f);
+
+        double in = 0.0, out = 0.0, b0 = 0.0, b1 = 0.0, b2 = 0.0;
+        bool finite = true;
+        juce::MidiBuffer midi;
+        for (int block = 0; block < 400; ++block)
+        {
+            juce::AudioBuffer<float> buffer (2, 512);
+            for (int n = 0; n < 512; ++n)
+            {
+                const double white = random.nextDouble() * 2.0 - 1.0;
+                b0 = 0.99765 * b0 + white * 0.0990460;
+                b1 = 0.96300 * b1 + white * 0.2965164;
+                b2 = 0.57000 * b2 + white * 1.0526913;
+                const auto x = (float) (0.1 * (b0 + b1 + b2 + white * 0.1848));
+                buffer.setSample (0, n, x);
+                buffer.setSample (1, n, x);
+            }
+            const double blockIn = buffer.getRMSLevel (0, 0, 512);
+            p.processBlock (buffer, midi);
+            finite = finite && std::isfinite (buffer.getRMSLevel (0, 0, 512));
+            if (block >= 200)
+            {
+                in  += blockIn * blockIn;
+                out += (double) buffer.getRMSLevel (0, 0, 512) * buffer.getRMSLevel (0, 0, 512);
+            }
+        }
+        const double db = 10.0 * std::log10 (out / in);
+        check (loaded && finite && db > -12.0 && db < 6.0,
+               std::string (preset.name) + " loads and peaks at a sensible level (" + std::to_string (db) + " dB)");
+        setParam (p, "amount", 0.0f);
+        p.reset();
+    }
+    folder.deleteRecursively();
+}
 } // namespace
 
 int main()
@@ -1622,6 +2000,9 @@ int main()
     testRiserFollowsProject();
     testRiserTimingState();
     testRiserView();
+    testEffectViews();
+    testPresets();
+    testFactoryPresets();
     testLinkHub();
     testLinkedProcessing();
     testLinkingEditors();

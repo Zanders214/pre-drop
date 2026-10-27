@@ -75,6 +75,36 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
     addTrackLevel (ParamID::trackReverb, "Track Reverb");
     addTrackLevel (ParamID::trackDelay,  "Track Delay");
 
+    // How the built-in effects sound (EffectSettings). Linked tracks use the
+    // main's.
+    for (size_t i = 0; i < EffectSettings::specs.size(); ++i)
+    {
+        const auto  id   = (EffectSettings::Id) i;
+        const auto& spec = EffectSettings::specs[i];
+        const auto  show = [id] (float value, int) { return EffectSettings::format (id, value); };
+        using Kind = EffectSettings::Kind;
+        if (spec.kind == Kind::toggle)
+        {
+            layout.add (std::make_unique<AudioParameterBool> (ParameterID { spec.id, 1 }, spec.name, spec.defaultValue >= 0.5f));
+        }
+        else if (spec.kind == Kind::note || spec.kind == Kind::slope)
+        {
+            StringArray choices;
+            for (int c = juce::roundToInt (spec.min); c <= juce::roundToInt (spec.max); ++c)
+                choices.add (EffectSettings::format (id, (float) c));
+            layout.add (std::make_unique<AudioParameterChoice> (ParameterID { spec.id, 1 }, spec.name, choices,
+                                                                juce::roundToInt (spec.defaultValue)));
+        }
+        else
+        {
+            NormalisableRange<float> range (spec.min, spec.max);
+            if (spec.centre > 0.0f)
+                range.setSkewForCentre (spec.centre);
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spec.id, 1 }, spec.name, range, spec.defaultValue,
+                                                               AudioParameterFloatAttributes().withStringFromValueFunction (show)));
+        }
+    }
+
     return layout;
 }
 
@@ -138,6 +168,7 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         };
 
         engine.setAmount      (active ? main.amount.load() : 0.0f);
+        engine.setEffectSettings (active ? main.effectSettings() : getEffectSettings());
         engine.setHpfDepth    (depth (LinkHub::Effect::hpf));
         engine.setReverbDepth (depth (LinkHub::Effect::reverb));
         engine.setDelayDepth  (depth (LinkHub::Effect::delay));
@@ -152,6 +183,7 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         link.publishMainState();
 
         engine.setAmount      (param (ParamID::amount));
+        engine.setEffectSettings (getEffectSettings());
         engine.setHpfDepth    (tracksDoTheRest ? 0.0f : param (ParamID::hpfDepth));
         engine.setReverbDepth (tracksDoTheRest ? 0.0f : param (ParamID::reverbDepth));
         engine.setDelayDepth  (tracksDoTheRest ? 0.0f : param (ParamID::delayDepth));
@@ -224,6 +256,14 @@ void PreDropAudioProcessor::setStateInformation (const void* data, int sizeInByt
 void PreDropAudioProcessor::updateTrackProperties (const TrackProperties& properties)
 {
     link.setHostTrackName (properties.name);
+}
+
+EffectSettings PreDropAudioProcessor::getEffectSettings() const noexcept
+{
+    EffectSettings settings;
+    for (size_t i = 0; i < settings.values.size(); ++i)
+        settings.values[i] = apvts.getRawParameterValue (EffectSettings::specs[i].id)->load();
+    return settings;
 }
 
 PreDropEngine::Transport PreDropAudioProcessor::readTransport() const

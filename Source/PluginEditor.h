@@ -10,6 +10,8 @@
 #include "EffectSlotButton.h"
 #include "TrackMatrix.h"
 #include "RiserView.h"
+#include "EffectView.h"
+#include "PresetButton.h"
 #include "TrackPanel.h"
 
 /**
@@ -46,15 +48,18 @@ public:
 private:
     void timerCallback() override;
     void updateRiserButton();
+    void updateHpfButton();
     void fitRiserLabel();
     void paintHeader (juce::Graphics&, float scale) const;
     void paintSliderLabels (juce::Graphics&, float scale) const;
     void paintDepthPanel (juce::Graphics&, float scale) const;
 
-    // What fills the slot under the chips while this instance is MAIN. The
-    // RISER view takes the button row above it too.
-    enum class Reveal { curve, effects, tracks, riser };
+    // What fills the slot under the chips while this instance is MAIN. An
+    // effect's view (RISER, REVERB, DELAY, HIGH-PASS) takes the button row
+    // above it too.
+    enum class Reveal { curve, effects, tracks, riser, reverb, delay, hpf };
     void setReveal (Reveal newReveal);
+    bool showsEffectView() const noexcept;
 
     // Linking. "Track mode" covers TRACK and RETURN: both follow the main.
     bool isTrackMode() const noexcept;
@@ -142,6 +147,23 @@ private:
     };
     SlotButtons slotButtons;
 
+    // The REVERB, DELAY and HIGH-PASS views, opened from the pills under their
+    // knobs in EFFECTS (the high-pass's shows its slope).
+    struct EffectViews
+    {
+        explicit EffectViews (PreDropAudioProcessor& p)
+            : reverb (p, EffectView::Effect::reverb),
+              delay  (p, EffectView::Effect::delay),
+              hpf    (p, EffectView::Effect::hpf) {}
+
+        EffectView       reverb;
+        EffectView       delay;
+        EffectView       hpf;
+        juce::TextButton hpfButton;
+        juce::String     hpfLabel { "?" };   // forces the first update
+    };
+    EffectViews effectViews;
+
     // The MAIN / TRACK pill, the main's TRACKS button and panel, and the panel
     // a TRACK shows instead.
     struct LinkControls
@@ -155,6 +177,9 @@ private:
         int              shownRole = -1;   // forces the first applyRole
     };
     LinkControls link;
+
+    // The header's preset pill, between the wordmark and the MAIN pill.
+    PresetButton presetButton;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessorEditor)
 };

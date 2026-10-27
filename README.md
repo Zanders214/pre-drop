@@ -55,6 +55,55 @@ and beats drawn over it, a playhead while it plays, and its timing:
 The timing is saved with the sample. Sets saved before riser timing existed keep
 playing their riser at its own speed until you turn MATCH PROJECT on.
 
+## Shaping the built-in effects
+
+Open **EFFECTS** and click the pill under a knob to open that effect's view (BACK
+returns to EFFECTS):
+
+- **REVERB**: **SIZE** (the room at full Amount; it grows towards it), **DAMPING**,
+  **WIDTH** and **PRE-DELAY** (up to 250 ms before the tail starts).
+- **DELAY**: **TIME**, a note value at the project's tempo (1/32 to 1/1, with
+  triplets and dotted notes) or, with **SYNC** off, milliseconds; **FEEDBACK** (at
+  full Amount; it grows towards it); **TONE**, a low-pass on the repeats (OPEN leaves
+  them as they are); and **PING-PONG**, echoes bouncing left and right.
+- **HIGH-PASS**: **24 dB SLOPE** (off: 12 dB per octave) and **RESONANCE**, a peak at
+  the cutoff. Its pill in EFFECTS shows the slope.
+- **RISER** (with the built-in noise): where its sweep **START**s and **END**s, and its
+  **RESONANCE** (wide noise to a whistle).
+
+The defaults are PreDrop's original sound. Every setting is a parameter, so it's
+saved with your set and can be automated, and each one keeps its effect at the
+calibrated level (changing the tone or the resonance doesn't make it jump out). Linked
+TRACKs and RETURNs use the main's settings. While one of your VST3 plug-ins plays the
+reverb or delay its view dims these (the plug-in's own window has its settings); its
+source pill sits at the top of the view.
+
+## Presets
+
+The pill in the header (between the name and MAIN) holds the presets: pick one from
+its menu to load it, or choose **Save preset...**, **Export...** or **Import...**.
+**Init** at the top of the menu goes back to PreDrop's default sound (the noise
+riser and the built-in effects, every setting at its default). A
+preset is the sound: every effect's settings and depth, Mix, Output, the riser sample
+with its timing, and any VST3 reverb or delay with its own settings. It leaves Amount,
+the role and the track levels as they are. Presets are `.predrop` files in
+`~/Library/Audio/Presets/Zanders/PreDrop` on a Mac (the app-data folder's
+`Zanders/PreDrop/Presets` elsewhere; *Show presets folder* opens it). Export writes one
+anywhere, to share it; importing one loads it and keeps a copy in the folder. The
+name of the preset in use is saved with your set.
+
+PreDrop comes with six presets, written into the folder the first time you open the
+menu (delete any you don't want; they won't come back):
+
+| Preset | What it does |
+|--------|--------------|
+| **Big Room Lift** | A big, bright room and quarter-note echoes over a wide noise sweep: the all-round festival build. |
+| **Tight Club Riser** | A steep, slightly resonant high-pass, a short room and ping-pong 1/8 echoes, with a brighter, whistling riser. |
+| **Dub Throw** | Long, dark ping-pong 1/4D echoes that pile up, a damped room and only a hint of riser. |
+| **Resonant Sweep** | The high-pass climbs steep and resonant to 2.4 kHz, with a narrow, whistling riser and short 1/16 echoes. |
+| **Ambient Swell** | A huge, open room with pre-delay, slow half-note echoes and a low, wide riser; Mix at 90%. |
+| **Subtle Tension** | Everything gentle: a smaller room, soft 1/8 echoes, a quiet riser and a light high-pass. |
+
 ## Choosing which tracks get which effects
 
 Put PreDrop on your **master**: it's the **MAIN**, and on its own it works on the whole
@@ -98,8 +147,9 @@ where it isn't installed, the built-in effect plays and the pill says *MISSING*,
 its settings are kept for when it is. TRACKs and RETURNs have the same pills, under
 their REVERB and DELAY levels.
 
-With the built-in effects, Amount also grows the room and the delay feedback; with
-your own plug-in it sets the level, while the plug-in's own knobs set its sound. A
+With the built-in effects, Amount also grows the room and the delay feedback (see
+Shaping the built-in effects above); with your own plug-in it sets the level, while
+the plug-in's own knobs set its sound. A
 plug-in that reports latency adds that much pre-delay to its effect (reverbs and
 delays rarely have any).
 
@@ -110,10 +160,12 @@ delays rarely have any).
 | **Amount**  | The macro. Drives the whole build-up from 0% (clean) to 100% (peak). |
 | **Mix**     | Global dry/wet so the build-up can sit under the source.             |
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
+| **Presets** | The header pill beside the name: the preset in use, and a menu to load, save, export and import presets (see Presets above). |
 | **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
-| **Sources** | The pills under the REVERB, DELAY and RISER knobs in EFFECTS (and under REVERB and DELAY on TRACK / RETURN): what each effect uses. Reverb and delay: *BUILT-IN* or one of your VST3 effects. Riser: *NOISE* or your own sample (drop a WAV / AIFF / FLAC anywhere on the plugin); it opens the RISER view. |
-| **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above). BACK returns to EFFECTS. |
+| **Sources** | The pills under the knobs in EFFECTS: what each effect uses (reverb and delay: *BUILT-IN* or one of your VST3 effects; riser: *NOISE* or your own sample, which you can also drop anywhere on the plugin; high-pass: its slope). Each opens that effect's view. On TRACK / RETURN the reverb and delay pills choose their source directly. |
+| **Effect views** | REVERB, DELAY, HIGH-PASS: the source and the built-in effect's settings (see Shaping the built-in effects above). BACK returns to EFFECTS. |
+| **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above); or, with the noise, its START, END and RESONANCE. BACK returns to EFFECTS. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
@@ -155,6 +207,8 @@ Source/
   RiserTiming.h              a riser sample's tempo, meter and how it follows the project
   TrackLink.{h,cpp}          this instance's role (MAIN / TRACK / RETURN) and its place in the link
   EffectPlugins.{h,cpp}      the VST3 reverb / delay slots: loading, saving, windows, audio hand-over
+  EffectSettings.h           the built-in effects' settings (reverb size, delay time, slopes...) and their parameters
+  PresetManager.{h,cpp}      presets: the sound as a .predrop file, saved, loaded, exported and imported
   PluginEditor.{h,cpp}       "Neon Clean" editor: knob + chips + curve + sliders
   PreDropLookAndFeel.{h,cpp} custom knob (gradient ring) and Mix/Output sliders
   EffectChips.h              HPF/REV/DLY/RIS status chips (read-only indicators)
@@ -170,6 +224,9 @@ Source/
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
   TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels
   RiserView.h                the RISER view: waveform with bars and beats, the riser's timing controls
+  EffectView.h               the REVERB / DELAY / HIGH-PASS views: source and settings
+  SettingKnob.h              a small knob for one effect setting, with its name and value
+  PresetButton.h             the header's preset pill and its menu (save, export, import)
 Tests/
   PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
   PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model
@@ -182,8 +239,9 @@ The editor recreates the **"Direction D — Neon Clean"** design natively in JUC
 (no WebView): a multicolour progress-ring **Amount** knob with a centred readout,
 four effect status chips (the HPF cutoff, and each other effect's Amount × depth), a
 live build-up energy histogram you can also drag to set Amount, Mix / Output sliders,
-the EFFECTS panel of depth knobs, each with its source pill beneath, and the RISER
-view of the riser sample's waveform and timing. Indicator values are derived from Amount and
+the EFFECTS panel of depth knobs, each with its source pill beneath, a view per effect
+for its settings (the RISER view also shows the sample's waveform and timing), and a
+preset pill in the header. Indicator values are derived from Amount and
 the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
 against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).

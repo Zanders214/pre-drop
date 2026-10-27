@@ -6,9 +6,11 @@
 #include <functional>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "PluginProcessor.h"
 #include "PreDropLookAndFeel.h"
+#include "SettingKnob.h"
 #include "PreDropTheme.h"
 #include "RiserTiming.h"
 
@@ -475,6 +477,9 @@ private:
     project's tempo (MATCH PROJECT), locked to the project's bars, and if so
     how many bars it loops (BARS) and whether it keeps its pitch (KEEP PITCH)
     or speeds up / slows down like tape.
+
+    With the built-in noise instead of a sample it shows the noise's sweep:
+    where it STARTs and ENDs, and its RESONANCE.
 */
 class RiserView : public juce::Component
 {
@@ -523,6 +528,15 @@ public:
             changeTiming ([&wanted] (RiserTiming& t) { t = wanted; });
         };
         addAndMakeVisible (waveform);
+
+        using Id = EffectSettings::Id;
+        for (const auto& [id, tip] : { std::pair { Id::riserStart, "Where the noise's sweep starts, at the bottom of the build-up." },
+                                       std::pair { Id::riserEnd, "Where the noise's sweep ends, at full Amount." },
+                                       std::pair { Id::riserResonance, "Narrows the noise into a whistle." } })
+        {
+            noiseKnobs.push_back (std::make_unique<SettingKnob> (p.getState(), id, PreDrop::Palette::amber, knobLookAndFeel, tip));
+            addChildComponent (*noiseKnobs.back());
+        }
         refresh();
     }
 
@@ -540,6 +554,9 @@ public:
         uiScale = juce::jmax (0.1f, s);
         pills.setUiScale (uiScale);
         waveform.setUiScale (uiScale);
+        knobLookAndFeel.setUiScale (uiScale);
+        for (auto& k : noiseKnobs)
+            k->setUiScale (uiScale);
     }
 
     /** Follows the riser: its sample, timing and playhead. From the editor's timer. */
@@ -596,6 +613,13 @@ public:
     juce::TextButton& match() noexcept       { return matchPill; }
     juce::TextButton& keepPitch() noexcept   { return pitchPill; }
     RiserWaveform&    wave() noexcept        { return waveform; }
+    SettingKnob*      noiseKnob (EffectSettings::Id id) noexcept
+    {
+        for (auto& k : noiseKnobs)
+            if (k->settingId() == id)
+                return k.get();
+        return nullptr;
+    }
     juce::String      getStatus() const      { return statusText(); }
 
     void paint (juce::Graphics& g) override
@@ -608,6 +632,15 @@ public:
         g.setFont (Fonts::sans (8.5f * s, true, 0.08f));
         g.setColour (processor.getRiser().getTiming().matchProject ? Palette::textMid : Palette::textDimmer);
         g.drawText (shownStatus, statusArea.toFloat(), juce::Justification::centredRight, false);
+
+        if (shownLength <= 0.0)
+        {
+            g.setFont (Fonts::sans (9.0f * s, false, 0.02f));
+            g.setColour (Palette::textDim);
+            g.drawFittedText ("The built-in noise sweeps from START to END as Amount rises.\n"
+                              "Load a sample, or drop one on PreDrop, to use your own.",
+                              noteArea, juce::Justification::centred, 2);
+        }
     }
 
     void resized() override
@@ -632,25 +665,38 @@ public:
                                     (juce::Component*) &meterPill, (juce::Component*) &matchPill, (juce::Component*) &pitchPill })
             c->setVisible (sample);
 
-        if (sample)
+        waveform.setVisible (sample);
+        for (auto& k : noiseKnobs)
+            k->setVisible (! sample);
+        if (! sample)
         {
-            auto toggles = area.removeFromBottom (px (14.0f));
-            area.removeFromBottom (px (5.0f));
-            auto numbers = area.removeFromBottom (px (14.0f));
-            area.removeFromBottom (px (6.0f));
-
-            const int third = (numbers.getWidth() - 2 * gap) / 3;
-            tempoChip.setBounds (numbers.removeFromLeft (third));
-            numbers.removeFromLeft (gap);
-            barsChip.setBounds (numbers.removeFromLeft (third));
-            numbers.removeFromLeft (gap);
-            meterPill.setBounds (numbers);
-
-            const int halfW = (toggles.getWidth() - gap) / 2;
-            matchPill.setBounds (toggles.removeFromLeft (halfW));
-            toggles.removeFromLeft (gap);
-            pitchPill.setBounds (toggles);
+            // The noise's sweep: a line on what it does, then its three knobs.
+            area.removeFromTop (px (4.0f));
+            noteArea = area.removeFromTop (px (24.0f));
+            const int colW   = area.getWidth() / 4;
+            const int height = juce::jmin (area.getHeight(), px (72.0f));
+            auto row = area.withSizeKeepingCentre (colW * (int) noiseKnobs.size(), height);
+            for (auto& k : noiseKnobs)
+                k->setBounds (row.removeFromLeft (colW).reduced (px (4.0f), 0));
+            return;
         }
+
+        auto toggles = area.removeFromBottom (px (14.0f));
+        area.removeFromBottom (px (5.0f));
+        auto numbers = area.removeFromBottom (px (14.0f));
+        area.removeFromBottom (px (6.0f));
+
+        const int third = (numbers.getWidth() - 2 * gap) / 3;
+        tempoChip.setBounds (numbers.removeFromLeft (third));
+        numbers.removeFromLeft (gap);
+        barsChip.setBounds (numbers.removeFromLeft (third));
+        numbers.removeFromLeft (gap);
+        meterPill.setBounds (numbers);
+
+        const int halfW = (toggles.getWidth() - gap) / 2;
+        matchPill.setBounds (toggles.removeFromLeft (halfW));
+        toggles.removeFromLeft (gap);
+        pitchPill.setBounds (toggles);
 
         area.removeFromTop (px (6.0f));
         waveform.setBounds (area);
@@ -775,6 +821,7 @@ private:
 
     PreDropAudioProcessor& processor;
     PreDropLookAndFeel     pills;
+    DepthKnobLookAndFeel   knobLookAndFeel;
 
     juce::TextButton backButton;
     juce::TextButton sourcePill;
@@ -784,9 +831,11 @@ private:
     juce::TextButton matchPill;
     juce::TextButton pitchPill;
     RiserWaveform    waveform;
+    std::vector<std::unique_ptr<SettingKnob>> noiseKnobs;   // START, END, RESONANCE
     std::unique_ptr<juce::FileChooser> chooser;
 
     juce::Rectangle<int> statusArea;
+    juce::Rectangle<int> noteArea;
     juce::String shownName;
     juce::String shownStatus;
     double       shownLength = 0.0;
