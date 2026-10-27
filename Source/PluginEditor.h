@@ -24,7 +24,7 @@
     panel; as TRACK it shows the track's link status and effect switches, and
     the knob and chips mirror the main's Amount and depths.
 */
-class PreDropAudioProcessorEditor : public juce::AudioProcessorEditor,
+class PreDropAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                     public juce::FileDragAndDropTarget,
                                     private juce::Timer
 {
@@ -45,6 +45,7 @@ public:
 private:
     void timerCallback() override;
     void showRiserMenu();
+    void chooseRiserFile();
     void loadRiser (const juce::File& file);
     void updateRiserButton();
     void fitRiserLabel();
@@ -80,11 +81,17 @@ private:
     static constexpr int numDepths = 4;
     std::array<juce::Slider, numDepths> depthSliders;
 
+    // The controls' links to their parameters. The Amount one is dropped while
+    // the knob mirrors the main's Amount (as a TRACK).
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<SliderAttachment> amountAttachment;
-    std::unique_ptr<SliderAttachment> mixAttachment;
-    std::unique_ptr<SliderAttachment> trimAttachment;
-    std::array<std::unique_ptr<SliderAttachment>, numDepths> depthAttachments;
+    struct Attachments
+    {
+        std::unique_ptr<SliderAttachment> amount;
+        std::unique_ptr<SliderAttachment> mix;
+        std::unique_ptr<SliderAttachment> trim;
+        std::array<std::unique_ptr<SliderAttachment>, numDepths> depths;
+    };
+    Attachments attachments;
 
     // Painted regions computed by resized() and read back by paint().
     struct Layout
@@ -111,8 +118,9 @@ private:
     };
     LastValues last;
 
-    // The RISER pill beside EFFECTS: shows the sample in use, opens the
-    // load / back-to-noise menu, and owns the file chooser while it is open.
+    // The riser's source pill under its knob in EFFECTS: shows the sample in
+    // use, opens the load / back-to-noise menu, and owns the file chooser
+    // while it is open.
     struct RiserControl
     {
         juce::TextButton                   button;
@@ -122,7 +130,7 @@ private:
     };
     RiserControl riserUi;
 
-    // The REV / DLY plug-in slot pills along the bottom of the EFFECTS panel.
+    // The reverb's and delay's source pills, under their knobs in EFFECTS.
     struct SlotButtons
     {
         SlotButtons (PreDropAudioProcessor& p, juce::LookAndFeel& pills)

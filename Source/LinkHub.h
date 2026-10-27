@@ -36,12 +36,17 @@ public:
     enum class Effect { hpf = 0, reverb = 1, delay = 2 };
     static constexpr int numEffects = 3;
 
-    /** Implemented by a processor while it is set to TRACK. Message thread.
-        A level is 0..1: how much of the main's depth for that effect the track
-        gets (1, the default, is all of it; 0 is off). */
-    struct LinkedTrack
+    /** A PreDrop instance, whatever its role: what the hub knows it by. */
+    struct Member
     {
-        virtual ~LinkedTrack() = default;
+        virtual ~Member() = default;
+    };
+
+    /** Implemented by every instance, and listed while it is set to TRACK.
+        Message thread. A level is 0..1: how much of the main's depth for that
+        effect the track gets (1, the default, is all of it; 0 is off). */
+    struct LinkedTrack : Member
+    {
         virtual juce::String getLinkName() const = 0;
         virtual float getLinkLevel (Effect effect) const = 0;
         virtual void  setLinkLevel (Effect effect, float level) = 0;
@@ -58,20 +63,20 @@ public:
     // --- The main slot ------------------------------------------------------
     /** Makes `owner` the main if nobody holds the slot. True if `owner` is the
         main afterwards. */
-    bool claimMain (const void* owner) noexcept
+    bool claimMain (const Member* owner) noexcept
     {
-        const void* expected = nullptr;
+        const Member* expected = nullptr;
         return mainOwner.compare_exchange_strong (expected, owner) || expected == owner;
     }
 
     /** Gives up the slot if `owner` holds it. */
-    void releaseMain (const void* owner) noexcept
+    void releaseMain (const Member* owner) noexcept
     {
-        const void* expected = owner;
+        const Member* expected = owner;
         mainOwner.compare_exchange_strong (expected, nullptr);
     }
 
-    bool isMain (const void* owner) const noexcept { return owner != nullptr && mainOwner.load() == owner; }
+    bool isMain (const Member* owner) const noexcept { return owner != nullptr && mainOwner.load() == owner; }
     bool hasMain() const noexcept                  { return mainOwner.load() != nullptr; }
 
     MainState&       mainState() noexcept       { return main; }
@@ -106,7 +111,7 @@ public:
     }
 
     // --- Linked returns (message thread) -------------------------------------
-    void addReturn (const void* owner)
+    void addReturn (const Member* owner)
     {
         const juce::ScopedLock lock (tracksLock);
         if (std::find (returns.begin(), returns.end(), owner) == returns.end())
@@ -114,7 +119,7 @@ public:
         countFollowers();
     }
 
-    void removeReturn (const void* owner)
+    void removeReturn (const Member* owner)
     {
         const juce::ScopedLock lock (tracksLock);
         returns.erase (std::remove (returns.begin(), returns.end(), owner), returns.end());
@@ -139,11 +144,11 @@ private:
     // Called with tracksLock held: mirrors the list sizes for the audio threads.
     void countFollowers() noexcept { numFollowers.store ((int) (tracks.size() + returns.size())); }
 
-    std::atomic<const void*> mainOwner { nullptr };
+    std::atomic<const Member*> mainOwner { nullptr };
     std::atomic<int>         numFollowers { 0 };
     MainState main;
 
     juce::CriticalSection tracksLock;
     std::vector<LinkedTrack*> tracks;
-    std::vector<const void*>  returns;
+    std::vector<const Member*> returns;
 };

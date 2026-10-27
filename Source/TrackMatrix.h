@@ -22,7 +22,7 @@
     tracks' own parameters, edited through LinkHub, so each track saves (and can
     automate) its own. Scrolls with the mouse wheel when the list is long.
 */
-class TrackMatrix : public juce::Component,
+class TrackMatrix final : public juce::Component,
                     public juce::SettableTooltipClient
 {
 public:
@@ -76,14 +76,14 @@ public:
                               juce::Justification::centred, 3);
         };
 
-        if (! processor.isLinkMain())
+        if (! processor.getLink().isMain())
         {
             message ("Another PreDrop is the main.\nSet that one to TRACK (or remove it) to choose tracks here.");
             return;
         }
 
-        const auto tracks  = processor.getLinkHub().getTracks();
-        const int  returns = processor.getLinkHub().numReturns();
+        const auto tracks  = processor.getLink().getHub().getTracks();
+        const int  returns = processor.getLink().getHub().numReturns();
         paintStatus (g, (int) tracks.size(), returns);
 
         if (tracks.empty())
@@ -120,11 +120,11 @@ public:
 
         // Pinned ALL row: the column's level when every track shares it, else
         // their average, dimmed.
-        paintRow (g, 0, "ALL", [&] (LinkHub::Effect e) { return columnLevel (tracks, e); });
+        paintRow (g, 0, "ALL", [&tracks] (LinkHub::Effect e) { return columnLevel (tracks, e); });
 
         for (int r = 0; r < visibleTrackRows() && first + r < (int) tracks.size(); ++r)
         {
-            auto* track = tracks[(size_t) (first + r)];
+            const auto* track = tracks[(size_t) (first + r)];
             paintRow (g, r + 1, track->getLinkName(), [track] (LinkHub::Effect e)
             {
                 return std::pair { track->getLinkLevel (e), true };
@@ -135,11 +135,11 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         drag = {};
-        if (! processor.isLinkMain())
+        if (! processor.getLink().isMain())
             return;
 
         // Remember which cell was grabbed and its level, for a drag or a click.
-        const auto tracks = processor.getLinkHub().getTracks();
+        const auto tracks = processor.getLink().getHub().getTracks();
         if (const auto hit = cellAt (e.position, tracks); hit.row >= 0)
         {
             drag = hit;
@@ -169,15 +169,15 @@ public:
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        if (! processor.isLinkMain())
+        if (! processor.getLink().isMain())
             return;
-        if (const auto hit = cellAt (e.position, processor.getLinkHub().getTracks()); hit.row >= 0)
+        if (const auto hit = cellAt (e.position, processor.getLink().getHub().getTracks()); hit.row >= 0)
             applyLevel (hit, 1.0f);
     }
 
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override
     {
-        const int tracks = (int) processor.getLinkHub().getTracks().size();
+        const auto tracks = (int) processor.getLink().getHub().getTracks().size();
         scroll = juce::jlimit (0, juce::jmax (0, tracks - visibleTrackRows()), scroll + (wheel.deltaY < 0.0f ? 1 : -1));
         refresh();
     }
@@ -221,7 +221,7 @@ private:
 
     void applyLevel (const Grab& target, float level)
     {
-        const auto tracks = processor.getLinkHub().getTracks();
+        const auto tracks = processor.getLink().getHub().getTracks();
         if (target.row == 0)
             for (auto* t : tracks)
                 t->setLinkLevel (target.effect, level);
@@ -235,8 +235,10 @@ private:
     {
         if (tracks.empty())
             return { 0.0f, true };
-        float sum = 0.0f, lo = 1.0f, hi = 0.0f;
-        for (auto* t : tracks)
+        float sum = 0.0f;
+        float lo  = 1.0f;
+        float hi  = 0.0f;
+        for (const auto* t : tracks)
         {
             const float level = t->getLinkLevel (e);
             sum += level;
@@ -323,8 +325,8 @@ private:
     juce::String describe() const
     {
         juce::String d;
-        d << (processor.isLinkMain() ? "M" : "-") << scroll << "R" << processor.getLinkHub().numReturns() << "|";
-        for (auto* t : processor.getLinkHub().getTracks())
+        d << (processor.getLink().isMain() ? "M" : "-") << scroll << "R" << processor.getLink().getHub().numReturns() << "|";
+        for (const auto* t : processor.getLink().getHub().getTracks())
         {
             d << t->getLinkName() << ":";
             for (int e = 0; e < LinkHub::numEffects; ++e)

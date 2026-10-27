@@ -294,8 +294,70 @@ public:
         for (int ch = 0; ch < channels; ++ch)
             buffers.dry.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
-        // An external reverb / delay takes over from the built-in one: the
-        // built-in ramps out while the external one ramps in at the same level.
+        setTargets();
+        const Engaged on = engageEffects();
+        const Block block { buffer.getArrayOfWritePointers(), channels, numSamples };
+
+        // --- 1. High-pass (per sample so the rising cutoff stays zipper-free) ----
+        if (on.hpf)
+            processHighPass (block);
+
+        // The high-passed signal is what reverb, delay and riser all ride on.
+        const float riserRmsStart = followSignalLevel (block);
+        keepExternalSends (buffer, channels, numSamples);
+
+        // --- 2. Reverb, wet only, on a copy of the high-passed signal ------------
+        const int reverbChannels = juce::jmin (channels, 2);
+        runReverb (buffer, on.reverb, reverbChannels);
+
+        // --- 3. Delay / echo with feedback (fed the high-passed signal) ---------
+        runDelay (block, on.delay);
+
+        // Sum the reverb in alongside the signal and echoes.
+        if (on.reverb)
+            for (int ch = 0; ch < reverbChannels; ++ch)
+                juce::FloatVectorOperations::add (block.data[ch], buffers.reverb.getReadPointer (ch), numSamples);
+
+        // --- 3b. External reverb / delay: each gets the high-passed signal (kept
+        //     aside above) and its wet output is summed in at the calibrated level.
+        runExternal (external.reverb, sm.extReverb, 0, block.data, channels, numSamples);
+        runExternal (external.delay,  sm.extDelay,  1, block.data, channels, numSamples);
+
+        // --- 4. Riser: user sample or filtered-noise sweep (summed in parallel) --
+        if (on.riser)
+        {
+            addRiser (block, riserRmsStart);
+        }
+        else
+        {
+            sm.riserLevel.skip (numSamples);
+            sm.riserCutoff.skip (numSamples);
+        }
+
+        // --- 5. Global dry/wet mix + output trim (per sample) -------------------
+        mixAndTrim (block);
+    }
+
+private:
+    // The block process() works on: the buffer's first `channels` channels.
+    struct Block
+    {
+        float* const* data;
+        int           channels;
+        int           numSamples;
+    };
+
+    // Which effects run this block.
+    struct Engaged
+    {
+        bool hpf, reverb, delay, riser;
+    };
+
+    // Points every smoother at what Amount and the depths ask for. An external
+    // reverb / delay takes over from the built-in one: the built-in ramps out
+    // while the external one ramps in at the same level.
+    void setTargets() noexcept
+    {
         const Targets t = mapMacro (amount, depths);
         sm.hpfCutoff  .setTargetValue (t.hpfCutoffHz);
         sm.reverbWet  .setTargetValue (external.reverb != nullptr ? 0.0f : t.reverbWet);
@@ -308,13 +370,14 @@ public:
         sm.riserCutoff.setTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sr));   // clear of Nyquist
         sm.mix        .setTargetValue (mix);
         sm.trim       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
+    }
 
-        auto* const* data = buffer.getArrayOfWritePointers();
-
-        // An effect whose control has settled at "off" is skipped outright (and
-        // reset once on the way, so it re-engages from silence). At Amount 0, or
-        // on a linked track with nothing switched on, the audio passes through
-        // bit for bit and costs next to nothing.
+    // An effect whose control has settled at "off" is skipped outright (and
+    // reset once on the way, so it re-engages from silence). At Amount 0, or
+    // on a linked track with nothing switched on, the audio passes through
+    // bit for bit and costs next to nothing.
+    Engaged engageEffects() noexcept
+    {
         const auto settledAtOff = [] (const auto& smoother, float off)
         {
             return ! smoother.isSmoothing() && smoother.getCurrentValue() <= off;
@@ -326,13 +389,17 @@ public:
         // other effects are added on top, so their own level ramps do that.
         const bool hpfWanted = ! settledAtOff (sm.hpfCutoff, minHpfCutoffHz);
         sm.hpfBlend.setTargetValue (hpfWanted ? 1.0f : 0.0f);
-        const bool hpfOn    = runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); });
-        const bool reverbOn = runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); });
-        const bool delayOn  = runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); });
-        const bool riserOn  = runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0; });
+        return {
+            runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); }),
+            runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); }),
+            runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); }),
+            runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0; })
+        };
+    }
 
-        // --- 1. High-pass (per sample so the rising cutoff stays zipper-free) ----
-        for (int n = 0; hpfOn && n < numSamples; ++n)
+    void processHighPass (const Block& b) noexcept
+    {
+        for (int n = 0; n < b.numSamples; ++n)
         {
             // The cutoff only moves while the smoother ramps; recomputing the TPT
             // coefficient (an std::tan) every sample at a steady setting is pure
@@ -344,159 +411,167 @@ public:
             }
 
             const float blend = sm.hpfBlend.getNextValue();
-            for (int ch = 0; ch < channels; ++ch)
+            for (int ch = 0; ch < b.channels; ++ch)
             {
-                const float dry = data[ch][n];
-                data[ch][n] = dry + blend * (hpf.processSample (ch, dry) - dry);
+                const float dry = b.data[ch][n];
+                b.data[ch][n] = dry + blend * (hpf.processSample (ch, dry) - dry);
             }
         }
+    }
 
-        // The high-passed signal is what reverb, delay and riser all ride on; the
-        // riser follows its level (smoothed over ~0.4 s) so it stays in step.
-        const float riserRmsStart = riser.signalRms;
-        {
-            double sum = 0.0;
-            for (int ch = 0; ch < channels; ++ch)
-                for (int n = 0; n < numSamples; ++n)
-                    sum += (double) data[ch][n] * data[ch][n];
+    // The riser follows the high-passed signal's level (smoothed over ~0.4 s)
+    // so it stays in step. Returns the level at the start of the block, for
+    // the riser to ramp from.
+    float followSignalLevel (const Block& b) noexcept
+    {
+        const float startRms = riser.signalRms;
 
-            const auto blockMeanSquare = (float) (sum / (double) (numSamples * channels));
-            const auto coeff = (float) (1.0 - std::exp (-(double) numSamples / (riserFollowSeconds * sr)));
-            riser.meanSquare += coeff * (blockMeanSquare - riser.meanSquare);
-            riser.signalRms   = std::sqrt (riser.meanSquare);
-        }
+        double sum = 0.0;
+        for (int ch = 0; ch < b.channels; ++ch)
+            for (int n = 0; n < b.numSamples; ++n)
+                sum += (double) b.data[ch][n] * b.data[ch][n];
 
-        // Keep the high-passed signal aside for any external effects (stage 3b):
-        // the delay stage below writes over it.
+        const auto blockMeanSquare = (float) (sum / (double) (b.numSamples * b.channels));
+        const auto coeff = (float) (1.0 - std::exp (-(double) b.numSamples / (riserFollowSeconds * sr)));
+        riser.meanSquare += coeff * (blockMeanSquare - riser.meanSquare);
+        riser.signalRms   = std::sqrt (riser.meanSquare);
+        return startRms;
+    }
+
+    // Keeps the high-passed signal aside for any external effects (stage 3b):
+    // the delay stage writes over it.
+    void keepExternalSends (const juce::AudioBuffer<float>& buffer, int channels, int numSamples) noexcept
+    {
         for (int slot = 0; slot < 2; ++slot)
             if ((slot == 0 ? external.reverb : external.delay) != nullptr)
                 for (int ch = 0; ch < juce::jmin (channels, externalChannels); ++ch)
                     buffers.external.copyFrom (slot * externalChannels + ch, 0, buffer, ch, 0, numSamples);
+    }
 
-        // --- 2. Reverb, wet only, on a copy of the high-passed signal ------------
-        const int reverbChannels = juce::jmin (channels, 2);
-        const float reverbSize   = sm.reverbSize.skip (numSamples);
-        const float reverbLevel  = sm.reverbWet.skip (numSamples);
-        if (reverbOn)
+    // The built-in reverb, wet only, into buffers.reverb (summed in later).
+    void runReverb (const juce::AudioBuffer<float>& buffer, bool on, int reverbChannels)
+    {
+        const int numSamples   = buffer.getNumSamples();
+        const float reverbSize  = sm.reverbSize.skip (numSamples);
+        const float reverbLevel = sm.reverbWet.skip (numSamples);
+        if (! on)
+            return;
+
+        applyReverbParameters (reverbSize, reverbLevel);
+
+        for (int ch = 0; ch < reverbChannels; ++ch)
+            buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+
+        juce::dsp::AudioBlock<float> block (buffers.reverb);
+        auto subBlock = block.getSubsetChannelBlock (0, (size_t) reverbChannels)
+                             .getSubBlock (0, (size_t) numSamples);
+        juce::dsp::ProcessContextReplacing ctx (subBlock);
+        reverb.process (ctx);
+    }
+
+    // The built-in delay, in place: the signal (none when wet only) plus echoes.
+    void runDelay (const Block& b, bool on) noexcept
+    {
+        if (! on)
         {
-            applyReverbParameters (reverbSize, reverbLevel);
-
-            for (int ch = 0; ch < reverbChannels; ++ch)
-                buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
-
-            juce::dsp::AudioBlock<float> block (buffers.reverb);
-            auto subBlock = block.getSubsetChannelBlock (0, (size_t) reverbChannels)
-                                 .getSubBlock (0, (size_t) numSamples);
-            juce::dsp::ProcessContextReplacing ctx (subBlock);
-            reverb.process (ctx);
+            sm.delayWet.skip (b.numSamples);
+            sm.delayFb.skip (b.numSamples);
+            if (wetOnly)
+                for (int ch = 0; ch < b.channels; ++ch)
+                    juce::FloatVectorOperations::clear (b.data[ch], b.numSamples);
+            return;
         }
 
-        // --- 3. Delay / echo with feedback (fed the high-passed signal) ---------
-        if (delayOn)
+        for (int n = 0; n < b.numSamples; ++n)
         {
-            for (int n = 0; n < numSamples; ++n)
-            {
-                const float wet = sm.delayWet.getNextValue();
-                const float fb  = sm.delayFb.getNextValue();
+            const float wet = sm.delayWet.getNextValue();
+            const float fb  = sm.delayFb.getNextValue();
 
-                for (int ch = 0; ch < channels; ++ch)
-                {
-                    const float in      = data[ch][n];
-                    const float delayed = delayLine.popSample (ch);
-                    delayLine.pushSample (ch, in + delayed * fb);
-                    data[ch][n] = (wetOnly ? 0.0f : in) + delayed * wet;
-                }
+            for (int ch = 0; ch < b.channels; ++ch)
+            {
+                const float in      = b.data[ch][n];
+                const float delayed = delayLine.popSample (ch);
+                delayLine.pushSample (ch, in + delayed * fb);
+                b.data[ch][n] = (wetOnly ? 0.0f : in) + delayed * wet;
             }
         }
-        else
-        {
-            sm.delayWet.skip (numSamples);
-            sm.delayFb.skip (numSamples);
-            if (wetOnly)
-                for (int ch = 0; ch < channels; ++ch)
-                    juce::FloatVectorOperations::clear (data[ch], numSamples);
-        }
+    }
 
-        // Sum the reverb in alongside the signal and echoes.
-        if (reverbOn)
-            for (int ch = 0; ch < reverbChannels; ++ch)
-                juce::FloatVectorOperations::add (data[ch], buffers.reverb.getReadPointer (ch), numSamples);
-
-        // --- 3b. External reverb / delay: each gets the high-passed signal (kept
-        //     aside above) and its wet output is summed in at the calibrated level.
-        runExternal (external.reverb, sm.extReverb, 0, data, channels, numSamples);
-        runExternal (external.delay,  sm.extDelay,  1, data, channels, numSamples);
-
-        // --- 4. Riser: user sample or filtered-noise sweep (summed in parallel) --
+    // Sums the riser in: the user's sample if one is loaded, else the noise
+    // sweep, at the riser level times the followed signal level (ramped across
+    // the block from where it started).
+    void addRiser (const Block& b, float startRms) noexcept
+    {
         const RiserSample* sample = riserSample.current();
         const bool useSample = sample != nullptr && sample->length() > 0;
 
-        const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
-        float signalRms = riserRmsStart;
-        if (! riserOn)
+        const float rmsStep = (riser.signalRms - startRms) / (float) b.numSamples;
+        float signalRms = startRms;
+        for (int n = 0; n < b.numSamples; ++n)
         {
-            sm.riserLevel.skip (numSamples);
-            sm.riserCutoff.skip (numSamples);
-        }
-        for (int n = 0; riserOn && n < numSamples; ++n)
-        {
-            const float level = sm.riserLevel.getNextValue();
+            const float level  = sm.riserLevel.getNextValue();
+            const float cutoff = sm.riserCutoff.getNextValue();   // kept in step for a switch back to noise
             signalRms += rmsStep;
 
             if (useSample)
-            {
-                if (level <= 0.0f)
-                {
-                    // Fully down (Amount or riser depth at 0): hold at the top,
-                    // so the next build-up starts on the sample's first sample.
-                    riser.samplePos = 0;
-                }
-                else
-                {
-                    // Loop the sample at unit RMS, scaled exactly like the noise.
-                    const float gain = sample->unitGain * level * signalRms;
-                    const int last = sample->audio.getNumChannels() - 1;
-                    for (int ch = 0; ch < channels; ++ch)
-                        data[ch][n] += sample->audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
+                addSampleRiser (b, n, *sample, level, signalRms);
+            else
+                addNoiseRiser (b, n, cutoff, level, signalRms);
+        }
+    }
 
-                    if (++riser.samplePos >= sample->length())
-                        riser.samplePos = 0;
-                }
-
-                sm.riserCutoff.getNextValue();   // keep the sweep in step for a switch back to noise
-                continue;
-            }
-
-            // Same coefficient caching as the HPF: skip the per-sample std::tan
-            // when the band-pass centre is parked. The gain that brings the
-            // band-passed noise to unit RMS is recomputed alongside it.
-            if (const float cutoff = sm.riserCutoff.getNextValue(); ! juce::exactlyEqual (cutoff, riser.lastCutoff))
-            {
-                riser.filter.setCutoffFrequency (cutoff);
-                riser.unitGain   = unitRmsGain (cutoff);
-                riser.lastCutoff = cutoff;
-            }
-
-            const float noise    = random.nextFloat() * 2.0f - 1.0f;
-            const float filtered = riser.filter.processSample (0, noise) * riser.unitGain * level * signalRms;
-
-            for (int ch = 0; ch < channels; ++ch)
-                data[ch][n] += filtered;
+    void addSampleRiser (const Block& b, int n, const RiserSample& sample, float level, float signalRms) noexcept
+    {
+        if (level <= 0.0f)
+        {
+            // Fully down (Amount or riser depth at 0): hold at the top, so the
+            // next build-up starts on the sample's first sample.
+            riser.samplePos = 0;
+            return;
         }
 
-        // --- 5. Global dry/wet mix + output trim (per sample) -------------------
+        // Loop the sample at unit RMS, scaled exactly like the noise.
+        const float gain = sample.unitGain * level * signalRms;
+        const int last = sample.audio.getNumChannels() - 1;
+        for (int ch = 0; ch < b.channels; ++ch)
+            b.data[ch][n] += sample.audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
+
+        if (++riser.samplePos >= sample.length())
+            riser.samplePos = 0;
+    }
+
+    void addNoiseRiser (const Block& b, int n, float cutoff, float level, float signalRms) noexcept
+    {
+        // Same coefficient caching as the HPF: skip the per-sample std::tan
+        // when the band-pass centre is parked. The gain that brings the
+        // band-passed noise to unit RMS is recomputed alongside it.
+        if (! juce::exactlyEqual (cutoff, riser.lastCutoff))
+        {
+            riser.filter.setCutoffFrequency (cutoff);
+            riser.unitGain   = unitRmsGain (cutoff);
+            riser.lastCutoff = cutoff;
+        }
+
+        const float noise    = random.nextFloat() * 2.0f - 1.0f;
+        const float filtered = riser.filter.processSample (0, noise) * riser.unitGain * level * signalRms;
+
+        for (int ch = 0; ch < b.channels; ++ch)
+            b.data[ch][n] += filtered;
+    }
+
+    // Global dry/wet mix and output trim, per sample.
+    void mixAndTrim (const Block& b) noexcept
+    {
         auto* const* dry = buffers.dry.getArrayOfReadPointers();
-        for (int n = 0; n < numSamples; ++n)
+        for (int n = 0; n < b.numSamples; ++n)
         {
             const float wetDry = sm.mix.getNextValue();
             const float gain   = sm.trim.getNextValue();
 
-            for (int ch = 0; ch < channels; ++ch)
-                data[ch][n] = (dry[ch][n] * (1.0f - wetDry) + data[ch][n] * wetDry) * gain;
+            for (int ch = 0; ch < b.channels; ++ch)
+                b.data[ch][n] = (dry[ch][n] * (1.0f - wetDry) + b.data[ch][n] * wetDry) * gain;
         }
     }
-
-private:
     static constexpr float minHpfCutoffHz = 20.0f;   // where the sweep parks: the HPF's "off"
 
     // Whether an effect runs this block. One that has settled at "off" is

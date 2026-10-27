@@ -81,7 +81,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
         sl.setDoubleClickReturnValue (true, def);
         sl.onValueChange = [this] { repaint(); };
         addChildComponent (sl);   // added but not visible until the panel opens
-        depthAttachments[idx] = std::make_unique<SliderAttachment> (p.getState(), depthParamIds[idx], sl);
+        attachments.depths[idx] = std::make_unique<SliderAttachment> (p.getState(), depthParamIds[idx], sl);
     }
 
     // --- EFFECTS reveal toggle -----------------------------------------------
@@ -129,20 +129,17 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     // --- Indicators (a TRACK shows what the main is driving it with) ----------
     effectChips.setAmountSource ([this] { return displayedAmount(); });
     using Effect = EffectChips::Effect;
-    for (const auto& source : { std::pair { Effect::hpf,    "hpfDepth" },
-                                std::pair { Effect::reverb, "reverbDepth" },
-                                std::pair { Effect::delay,  "delayDepth" },
-                                std::pair { Effect::riser,  "riserDepth" } })
-    {
-        const char* id = source.second;
-        effectChips.setDepthSource (source.first, [this, id] { return displayedDepth (id); });
-    }
+    for (const auto& [effect, id] : { std::pair { Effect::hpf,    "hpfDepth" },
+                                      std::pair { Effect::reverb, "reverbDepth" },
+                                      std::pair { Effect::delay,  "delayDepth" },
+                                      std::pair { Effect::riser,  "riserDepth" } })
+        effectChips.setDepthSource (effect, [this, depthId = id] { return displayedDepth (depthId); });
     addAndMakeVisible (effectChips);
     addAndMakeVisible (buildUpCurve);
 
-    amountAttachment = std::make_unique<SliderAttachment> (p.getState(), "amount", amountSlider);
-    mixAttachment    = std::make_unique<SliderAttachment> (p.getState(), "mix", mixSlider);
-    trimAttachment   = std::make_unique<SliderAttachment> (p.getState(), "outputTrim", trimSlider);
+    attachments.amount = std::make_unique<SliderAttachment> (p.getState(), "amount", amountSlider);
+    attachments.mix    = std::make_unique<SliderAttachment> (p.getState(), "mix", mixSlider);
+    attachments.trim   = std::make_unique<SliderAttachment> (p.getState(), "outputTrim", trimSlider);
 
     // The MIX/OUTPUT readouts are painted by the editor (above the tracks), so
     // repaint on value change to keep them in lock-step with the thumbs during a
@@ -164,7 +161,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
 {
     stopTimer();
-    processorRef.closeEffectPluginWindows();   // plug-in windows close with PreDrop's
+    processorRef.getEffectPlugins().closeWindows();   // plug-in windows close with PreDrop's
     amountSlider.setLookAndFeel (nullptr);
     mixSlider.setLookAndFeel (nullptr);
     trimSlider.setLookAndFeel (nullptr);
@@ -200,18 +197,18 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
 
 bool PreDropAudioProcessorEditor::isTrackMode() const noexcept
 {
-    return processorRef.followsMain();
+    return processorRef.getLink().followsMain();
 }
 
 bool PreDropAudioProcessorEditor::isReturnMode() const noexcept
 {
-    return processorRef.getRole() == PreDropAudioProcessor::Role::returnTrack;
+    return processorRef.getLink().getRole() == PreDropAudioProcessor::Role::returnTrack;
 }
 
 void PreDropAudioProcessorEditor::showRoleMenu()
 {
     using Role = PreDropAudioProcessor::Role;
-    const auto current = processorRef.getRole();
+    const auto current = processorRef.getLink().getRole();
 
     // Item ids are the role + 1 (0 means the menu was dismissed).
     juce::PopupMenu menu;
@@ -225,7 +222,7 @@ void PreDropAudioProcessorEditor::showRoleMenu()
     {
         if (safe == nullptr || choice <= 0)
             return;
-        safe->processorRef.setRole ((Role) (choice - 1));
+        safe->processorRef.getLink().setRole ((Role) (choice - 1));
         safe->applyRole();
     });
 }
@@ -234,9 +231,10 @@ void PreDropAudioProcessorEditor::applyRole()
 {
     const bool track = isTrackMode();
     const bool ret   = isReturnMode();
-    link.shownRole = (int) processorRef.getRole();
+    link.shownRole = (int) processorRef.getLink().getRole();
 
-    link.roleButton.setButtonText (ret ? "RETURN" : (track ? "TRACK" : "MAIN"));
+    static constexpr std::array<const char*, 3> roleNames { "MAIN", "TRACK", "RETURN" };   // by Role
+    link.roleButton.setButtonText (roleNames[(size_t) link.shownRole]);
     link.roleButton.setToggleState (track, juce::dontSendNotification);
 
     effectsButton.setVisible (! track);
@@ -252,14 +250,14 @@ void PreDropAudioProcessorEditor::applyRole()
     // instance's own (unused) one.
     if (track)
     {
-        amountAttachment.reset();
+        attachments.amount.reset();
         amountSlider.setInterceptsMouseClicks (false, false);
         amountSlider.setValue (displayedAmount(), juce::dontSendNotification);
     }
-    else if (amountAttachment == nullptr)
+    else if (attachments.amount == nullptr)
     {
         amountSlider.setInterceptsMouseClicks (true, true);
-        amountAttachment = std::make_unique<SliderAttachment> (processorRef.getState(), "amount", amountSlider);
+        attachments.amount = std::make_unique<SliderAttachment> (processorRef.getState(), "amount", amountSlider);
     }
 
     setReveal (reveal);
@@ -270,7 +268,7 @@ float PreDropAudioProcessorEditor::displayedAmount() const
     if (! isTrackMode())
         return paramValue (processorRef, "amount");
 
-    const auto& hub = processorRef.getLinkHub();
+    const auto& hub = processorRef.getLink().getHub();
     return hub.linkActive() ? hub.mainState().amount.load() : 0.0f;
 }
 
@@ -282,18 +280,20 @@ float PreDropAudioProcessorEditor::displayedDepth (const char* depthId) const
     // A track gets its own share of the main's depth for each effect, and never
     // the riser (that plays once, on the main).
     const juce::String id (depthId);
-    const auto effect = id == "hpfDepth"    ? LinkHub::Effect::hpf
-                      : id == "reverbDepth" ? LinkHub::Effect::reverb
-                      : LinkHub::Effect::delay;
-    const auto& hub = processorRef.getLinkHub();
+    auto effect = LinkHub::Effect::delay;
+    if (id == "hpfDepth")
+        effect = LinkHub::Effect::hpf;
+    else if (id == "reverbDepth")
+        effect = LinkHub::Effect::reverb;
+    const auto& hub = processorRef.getLink().getHub();
     if (id == "riserDepth" || ! hub.linkActive())
         return 0.0f;
-    return hub.mainState().depths[(size_t) effect].load() * processorRef.getLinkLevel (effect);
+    return hub.mainState().depths[(size_t) effect].load() * processorRef.getLink().getLinkLevel (effect);
 }
 
 void PreDropAudioProcessorEditor::updateRiserButton()
 {
-    const auto name = processorRef.getRiserSampleName();
+    const auto name = processorRef.getRiser().getName();
     if (name == riserUi.shownName)
         return;
 
@@ -311,7 +311,7 @@ void PreDropAudioProcessorEditor::showRiserMenu()
 {
     juce::PopupMenu menu;
     menu.addItem (1, "Load riser sample...");
-    menu.addItem (2, "Use built-in noise", processorRef.getRiserSampleName().isNotEmpty());
+    menu.addItem (2, "Use built-in noise", processorRef.getRiser().getName().isNotEmpty());
 
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&riserUi.button),
                         [safe = juce::Component::SafePointer (this)] (int choice)
@@ -321,26 +321,31 @@ void PreDropAudioProcessorEditor::showRiserMenu()
 
         if (choice == 2)
         {
-            safe->processorRef.clearRiserSample();
+            safe->processorRef.getRiser().clear();
             safe->updateRiserButton();
         }
         else if (choice == 1)
         {
-            safe->riserUi.chooser = std::make_unique<juce::FileChooser> ("Choose a riser sample", juce::File(),
-                                                                        safe->processorRef.getRiserFileWildcard());
-            safe->riserUi.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                                                [safe] (const juce::FileChooser& chooser)
-            {
-                if (safe != nullptr && chooser.getResult().existsAsFile())
-                    safe->loadRiser (chooser.getResult());
-            });
+            safe->chooseRiserFile();
         }
+    });
+}
+
+void PreDropAudioProcessorEditor::chooseRiserFile()
+{
+    riserUi.chooser = std::make_unique<juce::FileChooser> ("Choose a riser sample", juce::File(),
+                                                           processorRef.getRiser().getFileWildcard());
+    riserUi.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [safe = juce::Component::SafePointer (this)] (const juce::FileChooser& chooser)
+    {
+        if (safe != nullptr && chooser.getResult().existsAsFile())
+            safe->loadRiser (chooser.getResult());
     });
 }
 
 void PreDropAudioProcessorEditor::loadRiser (const juce::File& file)
 {
-    if (const auto error = processorRef.loadRiserSample (file); error.isNotEmpty())
+    if (const auto error = processorRef.getRiser().load (file); error.isNotEmpty())
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Couldn't use that riser", error);
 
     updateRiserButton();
@@ -359,7 +364,7 @@ void PreDropAudioProcessorEditor::fitRiserLabel()
 
 bool PreDropAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    return ! isTrackMode() && files.size() == 1 && processorRef.isSupportedRiserFile (juce::File (files[0]));
+    return ! isTrackMode() && files.size() == 1 && processorRef.getRiser().isSupportedFile (juce::File (files[0]));
 }
 
 void PreDropAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
@@ -401,7 +406,7 @@ void PreDropAudioProcessorEditor::timerCallback()
 {
     updateRiserButton();
 
-    if ((int) processorRef.getRole() != link.shownRole)
+    if ((int) processorRef.getLink().getRole() != link.shownRole)
         applyRole();
     if (link.matrix.isVisible())
         link.matrix.refresh();
