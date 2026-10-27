@@ -81,7 +81,9 @@ source pill sits at the top of the view.
 ## Presets
 
 The pill in the header (between the name and MAIN) holds the presets: pick one from
-its menu to load it, or choose **Save preset...**, **Export...** or **Import...**. A
+its menu to load it, or choose **Save preset...**, **Export...** or **Import...**.
+**Init** at the top of the menu goes back to PreDrop's default sound (the noise
+riser and the built-in effects, every setting at its default). A
 preset is the sound: every effect's settings and depth, Mix, Output, the riser sample
 with its timing, and any VST3 reverb or delay with its own settings. It leaves Amount,
 the role and the track levels as they are. Presets are `.predrop` files in

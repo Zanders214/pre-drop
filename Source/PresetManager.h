@@ -64,6 +64,10 @@ public:
     /** Loads a preset file. */
     juce::String load (const juce::File& file);
 
+    /** Back to PreDrop's own starting sound: every setting at its default, the
+        noise riser and the built-in reverb and delay (no preset named). */
+    void loadInit();
+
     /** Loads a preset file and keeps a copy in the folder. */
     juce::String importFrom (const juce::File& file);
 

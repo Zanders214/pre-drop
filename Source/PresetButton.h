@@ -130,7 +130,8 @@ private:
 
 /**
     PresetButton: the header's preset pill. It shows the preset last saved or
-    loaded (PRESETS before there is one) and opens a menu: the saved presets,
+    loaded (PRESETS before there is one) and opens a menu: Init (back to the
+    default sound), the saved presets,
     Save preset... (asks for a name over the editor), Export... and Import...
     (any .predrop file, kept in the presets folder too) and the folder itself.
 */
@@ -172,6 +173,7 @@ public:
     static constexpr int exportId      = 2;
     static constexpr int importId      = 3;
     static constexpr int folderId      = 4;
+    static constexpr int initId        = 5;
     static constexpr int firstPresetId = 100;   // + index into the saved presets
 
     /** The menu the pill opens (built apart from showing it, so it can be
@@ -182,6 +184,8 @@ public:
         listed = presets.getPresets();
 
         juce::PopupMenu menu;
+        menu.addItem (initId, "Init (the default sound)");
+        menu.addSeparator();
         menu.addSectionHeader ("Presets");
         if (listed.isEmpty())
             menu.addItem (-1, "None saved yet", false);
@@ -209,6 +213,8 @@ public:
             chooseImportFile();
         else if (itemId == folderId)
             presets.getFolder().revealToUser();
+        else if (itemId == initId)
+            presets.loadInit();
         else if (itemId >= firstPresetId && itemId - firstPresetId < listed.size())
             report (presets.load (listed[itemId - firstPresetId]), "Couldn't load that preset");
         refresh();

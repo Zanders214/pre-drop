@@ -134,6 +134,12 @@ juce::String PresetManager::load (const juce::File& file)
     return {};
 }
 
+void PresetManager::loadInit()
+{
+    apply (juce::ValueTree (presetTag));   // mentions nothing, so all of it returns to its default
+    setCurrentName ({});
+}
+
 juce::String PresetManager::importFrom (const juce::File& file)
 {
     const auto preset = read (file);

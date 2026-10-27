@@ -1839,7 +1839,7 @@ void testPresets()
             return 0;
         };
         check (idOf ("Shared Wash", true) >= PresetButton::firstPresetId && idOf ("Shared Wash (2)", false) > 0
-                 && idOf ("Dub Throw", false) > 0
+                 && idOf ("Dub Throw", false) > 0 && idOf ("Init (the default sound)", false) == PresetButton::initId
                  && idOf ("Save preset...", false) == PresetButton::saveId && idOf ("Export...", false) == PresetButton::exportId
                  && idOf ("Import...", false) == PresetButton::importId && idOf ("Show presets folder", false) == PresetButton::folderId,
                "its menu lists the presets (ticking this one, PreDrop's own among them) with save, export, import and the folder");
@@ -1872,6 +1872,25 @@ void testPresets()
         pill->startNaming().field().setText ("Cancelled", juce::dontSendNotification);
         pill->finishNaming (0);
         check (! presets.fileFor ("Cancelled").existsAsFile() && pill->getPrompt() == nullptr, "Cancel saves nothing");
+
+        // Init: back to the default sound, leaving Amount and the track levels.
+        setParam (p, "reverbSize", 0.4f);
+        setParam (p, "hpfSlope", 1.0f);
+        setParam (p, "outputTrim", -6.0f);
+        setParam (p, "amount", 0.6f);
+        setParam (p, "trackDelay", 0.3f);
+        p.getRiser().load (sample);
+        p.getEffectPlugins().load (PreDropAudioProcessor::EffectSlot::delay, juce::File (PREDROP_TEST_VST3));
+        pill->choose (PresetButton::initId);
+        check (approx (param (p, "reverbSize"), 0.95f, 1.0e-3f) && param (p, "hpfSlope") < 0.5f
+                 && approx (param (p, "outputTrim"), 0.0f, 1.0e-3f) && approx (param (p, "reverbDepth"), 0.5f, 1.0e-3f)
+                 && approx (param (p, "mix"), 1.0f, 1.0e-3f),
+               "Init puts every setting back to its default");
+        check (p.getRiser().getName().isEmpty() && p.getEffectPlugins().getName (PreDropAudioProcessor::EffectSlot::delay).isEmpty(),
+               "with the noise riser and the built-in effects");
+        check (approx (param (p, "amount"), 0.6f, 1.0e-3f) && approx (param (p, "trackDelay"), 0.3f, 1.0e-3f),
+               "leaving Amount and the track levels where they were");
+        check (presets.getCurrentName().isEmpty() && pill->getButtonText() == "PRESETS", "and naming no preset");
 
         setParam (p, "role", 1.0f);
         check (pumpUntil ([&] { return ! pill->isVisible(); }), "a TRACK has no presets (its sound is the main's)");
