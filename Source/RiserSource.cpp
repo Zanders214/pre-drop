@@ -303,9 +303,10 @@ std::unique_ptr<RiserSample> RiserSource::render (const Request& r)
     }
     else
     {
-        // A whole number of bars from the top, at the project's tempo.
+        // A whole number of bars from the top (trimmed, or padded with
+        // silence), at the project's tempo.
         const double seconds = r.audio->getNumSamples() / r.sourceRate;
-        const double loopSeconds = t.wholeBarsIn (seconds) * t.barSeconds();
+        const double loopSeconds = t.loopBarsFor (seconds) * t.barSeconds();
         const auto loop = fitted (*r.audio, (int) std::lround (loopSeconds * r.sourceRate));
 
         if (t.keepPitch && r.hostTempo > 0.0)
@@ -344,6 +345,7 @@ void RiserSource::saveTo (juce::ValueTree& state) const
     sample.setProperty ("beatUnit", loaded.timing.beatUnit, nullptr);
     sample.setProperty ("matchProject", loaded.timing.matchProject, nullptr);
     sample.setProperty ("keepPitch", loaded.timing.keepPitch, nullptr);
+    sample.setProperty ("loopBars", loaded.timing.loopBars, nullptr);
     state.appendChild (sample, nullptr);
 }
 
@@ -364,6 +366,7 @@ void RiserSource::restoreFrom (const juce::ValueTree& state)
     timing.beatUnit     = (int) sample.getProperty ("beatUnit", timing.beatUnit) == 8 ? 8 : 4;
     timing.matchProject = sample.getProperty ("matchProject", false);
     timing.keepPitch    = sample.getProperty ("keepPitch", true);
+    timing.loopBars     = juce::jlimit (0, RiserTiming::maxLoopBars, (int) sample.getProperty ("loopBars", 0));
     const bool hasTiming = sample.hasProperty ("bpm");
 
     if (loadFromData (fileData, sample["name"].toString(), hasTiming ? &timing : nullptr, false).isNotEmpty())

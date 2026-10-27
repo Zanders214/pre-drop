@@ -8,8 +8,9 @@
 
     The sample's own tempo and meter, which place its bar and beat lines, and
     how it plays against the project: at the project's tempo or its own, and,
-    when it follows the project, whether its pitch stays put (time-stretched)
-    or moves with the tempo (played faster or slower, like tape).
+    when it follows the project, how many bars it loops and whether its pitch
+    stays put (time-stretched) or moves with the tempo (played faster or
+    slower, like tape).
 
     Tempos are in quarter notes per minute, as hosts report them, whatever the
     meter.
@@ -21,9 +22,11 @@ struct RiserTiming
     int    beatUnit     = 4;       // ... of this note value (4 = quarter, 8 = eighth)
     bool   matchProject = true;    // play at the project's tempo
     bool   keepPitch    = true;    // ... time-stretched, rather than sped up / slowed down
+    int    loopBars     = 0;       // ... looping this many bars (0: the whole bars nearest its length)
 
     static constexpr double minBpm = 40.0;
     static constexpr double maxBpm = 300.0;
+    static constexpr int    maxLoopBars = 64;
 
     double quarterNotesPerBar() const noexcept { return beatsPerBar * 4.0 / beatUnit; }
     double barSeconds() const noexcept         { return quarterNotesPerBar() * 60.0 / bpm; }
@@ -38,6 +41,13 @@ struct RiserTiming
         return juce::jmax (1, (int) std::lround (barsIn (seconds)));
     }
 
+    /** The bars a loop plays, following the project: as set, or else the
+        whole bars nearest its length. */
+    int loopBarsFor (double seconds) const noexcept
+    {
+        return loopBars > 0 ? juce::jmin (loopBars, maxLoopBars) : juce::jmin (wholeBarsIn (seconds), maxLoopBars);
+    }
+
     /** The tempo at which `seconds` of the sample is exactly `bars` bars. */
     double bpmForBars (double seconds, double bars) const noexcept
     {
@@ -47,7 +57,7 @@ struct RiserTiming
     bool operator== (const RiserTiming& o) const noexcept
     {
         return juce::approximatelyEqual (bpm, o.bpm) && beatsPerBar == o.beatsPerBar && beatUnit == o.beatUnit
-            && matchProject == o.matchProject && keepPitch == o.keepPitch;
+            && matchProject == o.matchProject && keepPitch == o.keepPitch && loopBars == o.loopBars;
     }
     bool operator!= (const RiserTiming& o) const noexcept { return ! (*this == o); }
 

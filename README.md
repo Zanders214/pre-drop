@@ -32,15 +32,21 @@ the original file moves.
 That pill opens the **RISER** view: your sample's waveform with its bars (numbered)
 and beats drawn over it, a playhead while it plays, and its timing:
 
-- **BPM** is the sample's own tempo, which places its bars and beats. **BARS** is the
-  same thing put another way: how many bars the sample spans. Drag either up or down,
-  scroll, or double-click to type. A first guess comes from the file name ("128 BPM",
-  "8 Bars") or, failing that, its length.
+- **BPM** is the sample's own tempo, which places its bars and beats. Drag it up or
+  down, scroll, or double-click to type. A first guess comes from the file name
+  ("128 BPM", "8 Bars") or, failing that, its length.
+- **Drag the waveform** to stretch it against the bars: the point you grab lands where
+  you let go (snapping to beat lines; hold shift to place it freely), which sets the
+  BPM. The loop keeps its bars, so dragging the end of the sound onto a bar line
+  cuts the quiet tail after it.
+- **BARS** (with MATCH PROJECT) is how many bars loop: past them is cut, short of
+  them is silence. Drag the amber loop-end line on the waveform to set it there too.
+  By default it's the whole bars nearest the sample's length.
 - **Meter**: 2/4, 3/4, 4/4, 5/4, 6/8, 7/8 or 12/8.
 - **MATCH PROJECT** (on for a new sample): the riser plays at your project's tempo.
   When a build-up starts it waits for the next bar line (or starts at once if you're
-  within a sixteenth past one) and loops in whole bars; anything past the last whole
-  bar is shaded and doesn't play, and a sample just short of a bar is padded.
+  within a sixteenth past one) and loops its BARS; anything past them is shaded
+  and doesn't play.
   Off, it plays the whole sample at its own speed, looping with a short crossfade.
 - **KEEP PITCH** (with MATCH PROJECT): on, the sample is time-stretched to the
   project's tempo and keeps its pitch (re-rendered in the background when the tempo
@@ -107,7 +113,7 @@ delays rarely have any).
 | **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
 | **Sources** | The pills under the REVERB, DELAY and RISER knobs in EFFECTS (and under REVERB and DELAY on TRACK / RETURN): what each effect uses. Reverb and delay: *BUILT-IN* or one of your VST3 effects. Riser: *NOISE* or your own sample (drop a WAV / AIFF / FLAC anywhere on the plugin); it opens the RISER view. |
-| **Riser view** | The sample with its bars and beats, its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above). BACK returns to EFFECTS. |
+| **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above). BACK returns to EFFECTS. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building

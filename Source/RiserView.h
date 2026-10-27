@@ -157,14 +157,24 @@ private:
 };
 
 /**
-    RiserWaveform: the riser sample with its musical time drawn over it.
+    RiserWaveform: the riser sample laid out against its bars.
 
     Bar lines (numbered along the top) and beat lines come from the sample's
-    own tempo and meter. When the riser follows the project it loops in whole
-    bars: the loop's end is marked, and anything past it, which doesn't play,
-    is shaded. While the riser plays, a playhead shows where it is.
+    own tempo and meter, and the sample is drawn against them: change its
+    tempo and it stretches or squeezes between fixed bars. When the riser
+    follows the project it loops a whole number of bars: the loop's end is
+    marked, and anything past it, which doesn't play, is shaded. While the
+    riser plays, a playhead shows where it is.
+
+    Two drags change the timing (reported through onTimingChange):
+      - grab the sound and drag it along: it stretches from its start, so the
+        point you hold lands where you let go (on a beat line when it's
+        close; hold shift to place it freely). The loop keeps its bars, so
+        dragging the end of the sound onto a bar line cuts the tail after it;
+      - drag the loop's end marker to set how many bars the loop is.
 */
-class RiserWaveform : public juce::Component
+class RiserWaveform : public juce::Component,
+                      public juce::SettableTooltipClient
 {
 public:
     struct Shown
@@ -176,6 +186,9 @@ public:
 
     RiserWaveform() = default;
 
+    /** Called with the timing a drag asks for. */
+    std::function<void (const RiserTiming&)> onTimingChange;
+
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
     void setSample (Shown newShown)
@@ -184,6 +197,9 @@ public:
         peak = 0.0f;
         for (size_t i = 0; i < shown.outline.low.size(); ++i)
             peak = juce::jmax (peak, -shown.outline.low[i], shown.outline.high[i]);
+        setTooltip (hasSample() ? "Drag the sound to stretch it against the bars (it snaps to beats; hold shift to place it freely). "
+                                  "Drag the amber line to set how many bars loop."
+                                : juce::String());
         repaint();
     }
 
@@ -204,14 +220,88 @@ public:
         repaint();
     }
 
+    float getPlayhead() const noexcept { return playhead; }
+
     /** Where the loop ends, in seconds of the sample: whole bars when following
         the project, otherwise the whole sample. */
-    double loopSeconds() const noexcept
+    double loopSeconds() const noexcept { return loopBars() * shown.timing.barSeconds(); }
+
+    /** The bars the view spans (held still while dragging). */
+    double spanBars() const noexcept
     {
-        const auto& t = shown.timing;
-        return t.matchProject ? t.wholeBarsIn (shown.lengthSeconds) * t.barSeconds() : shown.lengthSeconds;
+        return drag.mode != Drag::none ? drag.span : juce::jmax (sampleBars(), loopBars(), 0.25);
     }
 
+    /** The x position of a point `bars` into the sample, and back. */
+    float xOfBars (double bars) const noexcept { return (float) (bars / spanBars()) * (float) getWidth(); }
+    double barsAt (float x) const noexcept     { return x / juce::jmax (1.0f, (float) getWidth()) * spanBars(); }
+
+    // --- Dragging ---------------------------------------------------------------
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        if (! hasSample())
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+        else
+            setMouseCursor (nearLoopEnd (e.position.x) ? juce::MouseCursor::LeftRightResizeCursor
+                                                       : juce::MouseCursor::DraggingHandCursor);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        drag = {};
+        if (! hasSample())
+            return;
+
+        const double span   = spanBars();
+        const double held   = barsAt (e.position.x);
+        drag.start = shown.timing;
+        if (nearLoopEnd (e.position.x))
+        {
+            drag.mode = Drag::loopEnd;
+        }
+        else if (held > 0.02 && held < sampleBars())
+        {
+            drag.mode        = Drag::stretch;
+            drag.heldSeconds = held * shown.timing.barSeconds();
+        }
+        drag.span = span;
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (drag.mode == Drag::none)
+            return;
+
+        auto t = drag.start;
+        const double at = barsAt (e.position.x);
+        if (drag.mode == Drag::loopEnd)
+        {
+            t.loopBars = juce::jlimit (1, RiserTiming::maxLoopBars, juce::roundToInt (at));
+        }
+        else
+        {
+            // The held point lands at `target` bars: a tempo that many bars
+            // per its distance from the start.
+            double target = juce::jmax (0.02, at);
+            if (! e.mods.isShiftDown())
+                target = snapToBeat (target);
+            t.bpm = juce::jlimit (RiserTiming::minBpm, RiserTiming::maxBpm,
+                                  t.quarterNotesPerBar() * 60.0 * target / drag.heldSeconds);
+            if (t.matchProject)
+                t.loopBars = drag.start.loopBarsFor (shown.lengthSeconds);   // the loop keeps its bars
+        }
+
+        if (t != shown.timing && onTimingChange != nullptr)
+            onTimingChange (t);
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        drag = {};
+        repaint();   // the span may change now
+    }
+
+    // --- Drawing ----------------------------------------------------------------
     void paint (juce::Graphics& g) override
     {
         using namespace PreDrop;
@@ -220,7 +310,7 @@ public:
         g.setColour (Palette::panelBottom.withAlpha (0.55f));
         g.fillRoundedRectangle (area, 6.0f * s);
 
-        if (shown.lengthSeconds <= 0.0 || shown.outline.high.empty())
+        if (! hasSample())
         {
             g.setFont (Fonts::sans (9.5f * s, false, 0.02f));
             g.setColour (Palette::textDim);
@@ -229,33 +319,30 @@ public:
             return;
         }
 
-        // The view spans the sample, or the loop where it runs past the end
-        // (padded with silence to a whole bar).
-        const double loopEnd = loopSeconds();
-        const double span    = juce::jmax (shown.lengthSeconds, loopEnd);
-        const auto ruler     = area.withHeight (11.0f * s);
-        const auto wave      = area.withTrimmedTop (ruler.getHeight()).reduced (0.0f, 2.0f * s);
-        const auto xOf       = [&] (double seconds) { return area.getX() + (float) (seconds / span) * area.getWidth(); };
+        const auto ruler = area.withHeight (11.0f * s);
+        const auto wave  = area.withTrimmedTop (ruler.getHeight()).reduced (0.0f, 2.0f * s);
 
-        paintGrid (g, ruler, wave, span);
-        paintWave (g, wave, span);
+        paintGrid (g, ruler, wave);
+        paintWave (g, wave);
 
-        // What the loop leaves out, dimmed, and where it wraps.
+        // What the loop leaves out, dimmed, and where it wraps (with a tab to
+        // drag it by).
         if (shown.timing.matchProject)
         {
-            const float end = xOf (loopEnd);
-            if (loopEnd < shown.lengthSeconds)
+            const float end = xOfBars (loopBars());
+            if (end < area.getRight())
             {
                 g.setColour (Palette::panelBottom.withAlpha (0.6f));
                 g.fillRect (juce::Rectangle (end, wave.getY(), area.getRight() - end, wave.getHeight()));
             }
             g.setColour (Palette::amber.withAlpha (0.9f));
             g.fillRect (juce::Rectangle (end - juce::jmax (1.0f, s), area.getY(), juce::jmax (1.0f, s) * 1.5f, area.getHeight()));
+            g.fillRoundedRectangle (juce::Rectangle (end - 6.0f * s, ruler.getY() + 1.0f * s, 6.0f * s, 9.0f * s), 1.5f * s);
         }
 
         if (playhead >= 0.0f)
         {
-            const float x = xOf (playhead * loopEnd);
+            const float x = xOfBars (playhead * loopBars());
             const auto line = juce::Rectangle (x - 0.5f * s, wave.getY(), juce::jmax (1.0f, s), wave.getHeight());
             juce::Path glow;
             glow.addRectangle (line);
@@ -265,16 +352,45 @@ public:
         }
     }
 
-    float getPlayhead() const noexcept { return playhead; }
-
 private:
-    void paintGrid (juce::Graphics& g, juce::Rectangle<float> ruler, juce::Rectangle<float> wave, double span) const
+    struct Drag
+    {
+        enum Mode { none, stretch, loopEnd };
+        Mode        mode        = none;
+        RiserTiming start;                // the timing when the drag began
+        double      span        = 1.0;    // the view's bars, held still meanwhile
+        double      heldSeconds = 0.0;    // the point of the sample being stretched
+    };
+
+    bool hasSample() const noexcept { return shown.lengthSeconds > 0.0 && ! shown.outline.high.empty(); }
+
+    double sampleBars() const noexcept { return shown.timing.barsIn (shown.lengthSeconds); }
+
+    // The bars that play: whole bars when following the project, else all of it.
+    double loopBars() const noexcept
+    {
+        return shown.timing.matchProject ? (double) shown.timing.loopBarsFor (shown.lengthSeconds) : sampleBars();
+    }
+
+    bool nearLoopEnd (float x) const noexcept
+    {
+        return shown.timing.matchProject && std::abs (x - xOfBars (loopBars())) <= 6.0f * uiScale;
+    }
+
+    // `bars`, moved onto the nearest beat line if it's within a few pixels.
+    double snapToBeat (double bars) const noexcept
+    {
+        const double beat    = 1.0 / shown.timing.beatsPerBar;
+        const double nearest = std::round (bars / beat) * beat;
+        return nearest > 0.0 && std::abs (xOfBars (nearest) - xOfBars (bars)) <= 6.0f * uiScale ? nearest : bars;
+    }
+
+    void paintGrid (juce::Graphics& g, juce::Rectangle<float> ruler, juce::Rectangle<float> wave) const
     {
         using namespace PreDrop;
         const float s = uiScale;
         const auto& t = shown.timing;
-        const float width = ruler.getWidth();
-        const float barPx  = (float) (t.barSeconds() / span) * width;
+        const float barPx  = ruler.getWidth() / (float) spanBars();
         const float beatPx = barPx / (float) t.beatsPerBar;
 
         // Number every bar, or every 2nd, 4th... when they crowd together.
@@ -283,7 +399,7 @@ private:
             every *= 2;
 
         g.setFont (Fonts::mono (7.5f * s));
-        const int bars = (int) std::ceil (span / t.barSeconds() - 1.0e-6);
+        const int bars = (int) std::ceil (spanBars() - 1.0e-6);
         for (int bar = 0; bar < bars; ++bar)
         {
             const float x = ruler.getX() + (float) bar * barPx;
@@ -303,7 +419,7 @@ private:
         }
     }
 
-    void paintWave (juce::Graphics& g, juce::Rectangle<float> wave, double span) const
+    void paintWave (juce::Graphics& g, juce::Rectangle<float> wave) const
     {
         using namespace PreDrop;
         const auto& low  = shown.outline.low;
@@ -313,13 +429,17 @@ private:
         const float mid    = wave.getCentreY();
         const float half   = wave.getHeight() * 0.5f;
 
+        // Outline columns per bar of the view.
+        const double columnsPerBar = shown.timing.barSeconds() / shown.lengthSeconds * columns;
+        const double barsPerPixel  = spanBars() / wave.getWidth();
+
         g.setColour (Palette::amber.withAlpha (0.8f));
         const int pixels = juce::roundToInt (wave.getWidth());
         for (int x = 0; x < pixels; ++x)
         {
             // The outline columns under this pixel; none past the sample's end.
-            const double from = span * x / pixels / shown.lengthSeconds * columns;
-            const double to   = span * (x + 1) / pixels / shown.lengthSeconds * columns;
+            const double from = x * barsPerPixel * columnsPerBar;
+            const double to   = (x + 1) * barsPerPixel * columnsPerBar;
             if (from >= columns)
                 break;
             float lo = 0.0f;
@@ -336,6 +456,7 @@ private:
     }
 
     Shown shown;
+    Drag  drag;
     float peak     = 0.0f;
     float playhead = -1.0f;
     float uiScale  = 1.0f;
@@ -349,11 +470,11 @@ private:
 
     Along the top: BACK (to EFFECTS), the source pill (load a sample or go back
     to the built-in noise) and the project's tempo. Then the sample with its
-    bars and beats, and its timing: its own tempo (BPM) or, the same thing put
-    another way, how many bars it spans (BARS); its meter; whether it plays at
-    the project's tempo (MATCH PROJECT), locked to the project's bars; and if
-    so, whether it keeps its pitch (KEEP PITCH) or speeds up / slows down
-    like tape.
+    bars and beats (drag it to stretch it, or its loop end to set the loop),
+    and its timing: its own tempo (BPM); its meter; whether it plays at the
+    project's tempo (MATCH PROJECT), locked to the project's bars, and if so
+    how many bars it loops (BARS) and whether it keeps its pitch (KEEP PITCH)
+    or speeds up / slows down like tape.
 */
 class RiserView : public juce::Component
 {
@@ -377,10 +498,11 @@ public:
 
         tempoChip.setTooltip ("The sample's own tempo, which places its bars and beats. Drag, scroll or double-click to type.");
         tempoChip.onValueChange = [this] { changeTiming ([this] (RiserTiming& t) { t.bpm = tempoChip.getValue(); }); };
-        barsChip.setTooltip ("How many bars the sample spans; sets its tempo to fit. Drag, scroll or double-click to type.");
+        barsChip.setTooltip ("How many bars loop, following the project: past them is cut, short of them is silence. "
+                             "Drag, scroll or double-click to type.");
         barsChip.onValueChange = [this]
         {
-            changeTiming ([this] (RiserTiming& t) { t.bpm = t.bpmForBars (shownLength, barsChip.getValue()); });
+            changeTiming ([this] (RiserTiming& t) { t.loopBars = juce::roundToInt (barsChip.getValue()); });
         };
         addAndMakeVisible (tempoChip);
         addAndMakeVisible (barsChip);
@@ -396,6 +518,10 @@ public:
         pitchPill.setTooltip ("On: time-stretched to the project's tempo, at its own pitch. Off: sped up or slowed down, like tape.");
         pitchPill.onClick = [this] { changeTiming ([] (RiserTiming& t) { t.keepPitch = ! t.keepPitch; }); };
 
+        waveform.onTimingChange = [this] (const RiserTiming& wanted)
+        {
+            changeTiming ([&wanted] (RiserTiming& t) { t = wanted; });
+        };
         addAndMakeVisible (waveform);
         refresh();
     }
@@ -552,8 +678,13 @@ private:
         // The chip being dragged or typed into keeps its own value.
         if (! tempoChip.isMouseButtonDown() && ! tempoChip.entryLabel().isBeingEdited())
             tempoChip.setValue (t.bpm, juce::dontSendNotification);
+        // BARS: how many loop, following the project; otherwise, dimmed, how
+        // many the whole sample spans.
         if (! barsChip.isMouseButtonDown() && ! barsChip.entryLabel().isBeingEdited() && shownLength > 0.0)
-            barsChip.setValue (t.barsIn (shownLength), juce::dontSendNotification);
+            barsChip.setValue (t.matchProject ? (double) t.loopBarsFor (shownLength) : t.barsIn (shownLength),
+                               juce::dontSendNotification);
+        barsChip.setEnabled (t.matchProject);
+        barsChip.setAlpha (t.matchProject ? 1.0f : 0.35f);
         tempoChip.repaint();
         barsChip.repaint();
 
@@ -648,7 +779,7 @@ private:
     juce::TextButton backButton;
     juce::TextButton sourcePill;
     NumberChip       tempoChip { "BPM", RiserTiming::minBpm, RiserTiming::maxBpm };
-    NumberChip       barsChip  { "BARS", 0.25, 128.0 };
+    NumberChip       barsChip  { "BARS", 1.0, (double) RiserTiming::maxLoopBars };
     juce::TextButton meterPill;
     juce::TextButton matchPill;
     juce::TextButton pitchPill;

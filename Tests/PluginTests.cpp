@@ -590,6 +590,10 @@ void testRiserTiming()
     check (t.wholeBarsIn (4.3) == 2 && t.wholeBarsIn (0.4) == 1 && same (t.barsIn (5.0), 2.5), "bars in a length, and whole bars (at least one)");
     check (same (t.bpmForBars (16.0, 8.0), 120.0) && same (t.bpmForBars (1.0, 64.0), RiserTiming::maxBpm),
            "the tempo that fits a length to a bar count, within limits");
+    check (t.loopBarsFor (4.3) == 2 && t.loopBarsFor (1000.0) == RiserTiming::maxLoopBars, "the loop is the whole bars nearest the length");
+    t.loopBars = 5;
+    check (t.loopBarsFor (4.3) == 5, "unless its bars are set");
+    t = {};
     auto other = t;
     other.keepPitch = false;
     check (t == RiserTiming {} && t != other, "timings compare by every setting");
@@ -672,6 +676,14 @@ void testRiserRendering()
     check (padded != nullptr && padded->length() == (int) (4.0 * sr)
                && std::abs (padded->audio.getSample (0, padded->length() - 100)) < 1.0e-6f,
            "a sample a little short of whole bars is padded to them with silence");
+
+    r.timing.loopBars = 3;
+    const auto threeBars = RiserSource::render (r);
+    r.timing.loopBars = 1;
+    const auto oneBar = RiserSource::render (r);
+    check (threeBars != nullptr && threeBars->length() == (int) (6.0 * sr) && oneBar != nullptr && oneBar->length() == (int) (2.0 * sr),
+           "a set number of bars loops, padded or cut");
+    r.timing.loopBars = 0;
 
     r.engineRate = 44100.0;
     r.hostTempo  = 150.0;
@@ -790,6 +802,7 @@ void testRiserTimingState()
 
     t.beatsPerBar = 3;
     t.keepPitch   = false;
+    t.loopBars    = 3;
     p.getRiser().setTiming (t);
     check (p.getRiser().waitForRender (10000) && p.getRiser().getTiming() == t, "the timing can be changed");
 
@@ -805,7 +818,7 @@ void testRiserTimingState()
     check (sample != nullptr, "the sample is in the saved state");
     if (sample == nullptr)
         return;
-    for (const auto* name : { "bpm", "beatsPerBar", "beatUnit", "matchProject", "keepPitch" })
+    for (const auto* name : { "bpm", "beatsPerBar", "beatUnit", "matchProject", "keepPitch", "loopBars" })
         sample->removeAttribute (name);
     juce::MemoryBlock oldState;
     juce::AudioProcessor::copyXmlToBinary (*xml, oldState);
@@ -864,20 +877,21 @@ void testRiserView()
     check (hasDetail (render (*view)), "the sample view renders");
 
     view->tempo().setValue (100.0, juce::sendNotificationSync);
-    check (same (p.getRiser().getTiming().bpm, 100.0) && same (view->bars().getValue(), 4.0 / 2.4, 0.01),
-           "BPM sets the sample's tempo, and the bar count follows");
+    check (same (p.getRiser().getTiming().bpm, 100.0) && same (view->bars().getValue(), 2.0),
+           "BPM sets the sample's tempo; it loops the whole bars nearest its length");
     view->bars().setValue (4.0, juce::sendNotificationSync);
-    check (same (p.getRiser().getTiming().bpm, 240.0) && same (view->tempo().getValue(), 240.0),
-           "BARS sets the tempo that fits that many bars");
+    check (p.getRiser().getTiming().loopBars == 4 && same (p.getRiser().getTiming().bpm, 100.0)
+               && same (view->wave().loopSeconds(), 4 * 2.4),
+           "BARS sets how many bars loop");
     view->setMeter (3, 4);
-    check (p.getRiser().getTiming().beatsPerBar == 3 && view->meter().getButtonText() == "3/4"
-               && same (view->bars().getValue(), 4.0 / 0.75, 0.01),
-           "the meter changes the bar length");
+    check (p.getRiser().getTiming().beatsPerBar == 3 && view->meter().getButtonText() == "3/4" && same (view->bars().getValue(), 4.0),
+           "the meter changes the bars, not how many loop");
 
     view->match().triggerClick();
     pumpMessages (30);
-    check (! p.getRiser().getTiming().matchProject && ! view->keepPitch().isEnabled() && view->getStatus() == "OWN TEMPO",
-           "MATCH PROJECT off: its own tempo, and KEEP PITCH doesn't apply");
+    check (! p.getRiser().getTiming().matchProject && ! view->keepPitch().isEnabled() && ! view->bars().isEnabled()
+               && view->getStatus() == "OWN TEMPO",
+           "MATCH PROJECT off: its own tempo; BARS and KEEP PITCH don't apply");
     view->match().triggerClick();
     pumpMessages (30);
     view->keepPitch().triggerClick();
@@ -913,8 +927,37 @@ void testRiserView()
     // The waveform: the loop is whole bars; the playhead shows where it is.
     view->setMeter (4, 4);
     view->tempo().setValue (120.0, juce::sendNotificationSync);
+    view->bars().setValue (2.0, juce::sendNotificationSync);
     auto& wave = view->wave();
-    check (same (wave.loopSeconds(), 4.0), "the drawn loop is the whole bars that play");
+    check (same (wave.loopSeconds(), 4.0) && same (wave.spanBars(), 2.0), "the drawn loop is the whole bars that play");
+
+    // Dragging the sound stretches it: the point held (a bar in, two seconds)
+    // lands on the beat line it's let go near, and the loop keeps its bars.
+    const float midY = (float) wave.getHeight() * 0.6f;
+    const auto dragWave = [&] (float from, float to)
+    {
+        wave.mouseDown (mouseAt (wave, { from, midY }, false));
+        wave.mouseDrag (mouseAt (wave, { to, midY }, true, juce::Point (from, midY)));
+        const double heldSpan = wave.spanBars();
+        wave.mouseUp (mouseAt (wave, { to, midY }, true, juce::Point (from, midY)));
+        return heldSpan;
+    };
+    wave.mouseMove (mouseAt (wave, { wave.xOfBars (1.0), midY }, false));
+    check (wave.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::DraggingHandCursor), "the sound can be grabbed");
+    const double heldSpan = dragWave (wave.xOfBars (1.0), wave.xOfBars (1.5) + 2.0f);
+    check (same (p.getRiser().getTiming().bpm, 180.0) && p.getRiser().getTiming().loopBars == 2 && same (heldSpan, 2.0),
+           "dragging the sound stretches it onto a beat, the bars held still ("
+               + juce::String (p.getRiser().getTiming().bpm).toStdString() + " BPM)");
+    check (same (wave.spanBars(), 3.0), "after the drag the view spans the stretched sample");
+
+    // ... and its loop end sets how many bars loop.
+    wave.mouseMove (mouseAt (wave, { wave.xOfBars (2.0), midY }, false));
+    check (wave.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::LeftRightResizeCursor), "the loop end can be grabbed");
+    dragWave (wave.xOfBars (2.0), wave.xOfBars (3.0) - 4.0f);
+    check (p.getRiser().getTiming().loopBars == 3 && same (view->bars().getValue(), 3.0), "dragging the loop end sets the bars that loop");
+
+    dragWave (1.0f, wave.xOfBars (2.0));
+    check (same (p.getRiser().getTiming().bpm, 180.0), "the very start can't be stretched");
     const auto still = render (*view);
     wave.setPlayhead (0.5f);
     check (same (wave.getPlayhead(), 0.5) && pixelsChanged (still, render (*view)) > 0, "the playhead is drawn");
