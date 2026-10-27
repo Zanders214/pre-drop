@@ -535,6 +535,9 @@ void testIdleEffectsPassThrough()
     constexpr double sr = 48000.0;
     constexpr int block = 512;
     PreDropEngine engine;
+    EffectSettings noDownlifter;   // Amount turned down, not a drop
+    noDownlifter.set (EffectSettings::Id::dropOn, 0.0f);
+    engine.setEffectSettings (noDownlifter);
     engine.prepare (sr, 2, block);
 
     const auto runBlocks = [&] (int count, float amount)
@@ -580,6 +583,7 @@ void testIdleEffectsPassThrough()
     settings.set (EffectSettings::Id::reverbPreDelay, 200.0f);
     settings.set (EffectSettings::Id::hpfSlope, 1.0f);
     settings.set (EffectSettings::Id::delayTone, 2000.0f);
+    settings.set (EffectSettings::Id::dropOn, 0.0f);
     fresh.setEffectSettings (settings);
     fresh.setRiserDepth (0.0f);
     fresh.setWetOnly (true);
@@ -1128,6 +1132,203 @@ void testEffectSettingsSound()
     }
 }
 
+// ---- The downlifter: what plays after the drop. --------------------------------
+
+// A build-up to `peak` over 4 s of pink noise, then the drop (Amount to 0 at
+// once, or over `fallSeconds`), and 3 s after it, of silence or a 110 Hz sine.
+// Returns channel 0 from the drop on (the build-up's input level in `inputRms`,
+// and the riser's on its own over its last half second in `riserRms`).
+struct DropRender
+{
+    std::vector<float> in;    // what went in after the drop
+    std::vector<float> out;
+    float inputRms = 0.0f;
+    float riserRms = 0.0f;
+};
+
+DropRender renderDrop (const EffectSettings& settings, PreDropEngine::Depths depths, bool soundAfter = false,
+                       double fallSeconds = 0.0, float peak = 1.0f)
+{
+    constexpr double sr = 48000.0;
+    constexpr int block = 512;
+    PreDropEngine engine;
+    engine.setEffectSettings (settings);
+    engine.setHpfDepth (0.0f);
+    engine.setReverbDepth (depths.reverb);
+    engine.setDelayDepth (depths.delay);
+    engine.setRiserDepth (depths.riser);
+    engine.setTransport ({ true, 120.0, 0.0, 0.0, 4.0 });
+    engine.prepare (sr, 2, block);
+
+    PinkNoise noise;
+    juce::AudioBuffer<float> buffer (2, block);
+    DropRender r;
+    double inSum = 0.0, riserSum = 0.0;
+    int riserCount = 0;
+    const int buildBlocks = (int) (4.0 * sr) / block;
+    const int fallBlocks  = (int) (fallSeconds * sr) / block;
+    const int afterBlocks = (int) (3.0 * sr) / block;
+    for (int b = 0; b < buildBlocks + fallBlocks + afterBlocks; ++b)
+    {
+        const bool after = b >= buildBlocks + fallBlocks;
+        float amount = peak;
+        if (b >= buildBlocks)
+            amount = after ? 0.0f : peak * (1.0f - (float) (b - buildBlocks + 1) / (float) (fallBlocks + 1));
+        engine.setAmount (amount);
+
+        for (int n = 0; n < block; ++n)
+        {
+            const auto i = (double) (b * block + n);
+            float x = noise.next();
+            if (after)
+                x = soundAfter ? 0.3f * (float) std::sin (juce::MathConstants<double>::twoPi * 110.0 * i / sr) : 0.0f;
+            buffer.setSample (0, n, x);
+            buffer.setSample (1, n, x);
+            if (after)
+                r.in.push_back (x);
+            else
+                inSum += (double) x * x;
+        }
+        const auto dryCopy = buffer;
+        engine.process (buffer);
+        for (int n = 0; n < block; ++n)
+        {
+            if (after)
+                r.out.push_back (buffer.getSample (0, n));
+            else if (b >= buildBlocks - (int) (0.5 * sr) / block && b < buildBlocks)
+            {
+                const float wet = buffer.getSample (0, n) - dryCopy.getSample (0, n);
+                riserSum += (double) wet * wet;
+                ++riserCount;
+            }
+        }
+    }
+    r.inputRms = (float) std::sqrt (inSum / (buildBlocks * block));
+    r.riserRms = (float) std::sqrt (riserSum / juce::jmax (1, riserCount));
+    return r;
+}
+
+float rmsOf (const std::vector<float>& x, double fromSeconds, double toSeconds)
+{
+    const auto from = (size_t) (fromSeconds * 48000.0);
+    const auto to   = std::min (x.size(), (size_t) (toSeconds * 48000.0));
+    double sum = 0.0;
+    for (size_t i = from; i < to; ++i)
+        sum += (double) x[i] * x[i];
+    return (float) std::sqrt (sum / (double) std::max<size_t> (1, to - from));
+}
+
+float peakOf (const std::vector<float>& x, double fromSeconds, double toSeconds)
+{
+    float peak = 0.0f;
+    for (auto i = (size_t) (fromSeconds * 48000.0); i < std::min (x.size(), (size_t) (toSeconds * 48000.0)); ++i)
+        peak = std::max (peak, std::abs (x[i]));
+    return peak;
+}
+
+// Zero crossings per second: rises and falls with the noise's band.
+float crossingsPerSecond (const std::vector<float>& x, double fromSeconds, double toSeconds)
+{
+    int crossings = 0;
+    const auto from = (size_t) (fromSeconds * 48000.0);
+    const auto to   = (size_t) (toSeconds * 48000.0);
+    for (size_t i = from + 1; i < to; ++i)
+        if ((x[i - 1] < 0.0f) != (x[i] < 0.0f))
+            ++crossings;
+    return (float) crossings / (float) (toSeconds - fromSeconds);
+}
+
+void testDownlifter()
+{
+    std::printf ("Downlifter:\n");
+    using Id = EffectSettings::Id;
+    const auto db = [] (float ratio) { return 20.0f * std::log10 (std::max (ratio, 1.0e-9f)); };
+
+    EffectSettings oneBar;
+    oneBar.set (Id::dropLength, 1.0f);   // 1 BAR: 2 s at 120 BPM
+    check (EffectSettings {}.isOn (Id::dropOn) && approx ((float) EffectSettings {}.dropBars(), 2.0f, 0.0f)
+               && EffectSettings::format (Id::dropLength, 0.0f) == "1/2 BAR",
+           "it's on by default, 2 bars long");
+
+    // The riser's noise alone.
+    PreDropEngine::Depths riserOnly;
+    riserOnly.reverb = riserOnly.delay = 0.0f;
+    const auto noiseDrop = renderDrop (oneBar, riserOnly);
+    const float startDb = db (rmsOf (noiseDrop.out, 0.0, 0.1) / noiseDrop.riserRms);
+    check (startDb > -1.5f && startDb < 1.0f,
+           "the drop turns the riser around at its own level (" + std::to_string (startDb).substr (0, 5) + " dB)");
+    const float earlyCrossings = crossingsPerSecond (noiseDrop.out, 0.0, 0.2);
+    const float lateCrossings  = crossingsPerSecond (noiseDrop.out, 1.2, 1.5);
+    check (lateCrossings < 0.3f * earlyCrossings, "its noise sweeps down (" + std::to_string ((int) earlyCrossings)
+               + " to " + std::to_string ((int) lateCrossings) + " crossings a second)");
+    check (rmsOf (noiseDrop.out, 1.6, 1.9) < 0.2f * rmsOf (noiseDrop.out, 0.0, 0.3), "and fades out");
+    check (peakOf (noiseDrop.out, 1.85, 1.95) > 0.0f && peakOf (noiseDrop.out, 2.1, 3.0) == 0.0f,
+           "over its LENGTH (1 bar at 120 BPM), then silence");
+
+    auto loud = oneBar;
+    loud.set (Id::dropLevel, 1.0f);
+    const float louderDb = db (rmsOf (renderDrop (loud, riserOnly).out, 0.0, 0.3) / rmsOf (noiseDrop.out, 0.0, 0.3));
+    check (approx (louderDb, 6.02f, 1.0f), "LEVEL 100% is 6 dB over 50% (" + std::to_string (louderDb).substr (0, 4) + " dB)");
+    auto silent = oneBar;
+    silent.set (Id::dropLevel, 0.0f);
+    check (peakOf (renderDrop (silent, riserOnly).out, 0.05, 3.0) == 0.0f, "LEVEL 0% plays no noise");
+
+    auto off = oneBar;
+    off.set (Id::dropOn, 0.0f);
+    check (peakOf (renderDrop (off, PreDropEngine::Depths {}).out, 0.2, 3.0) < 1.0e-4f,
+           "switched off, the drop cuts everything off as before");
+
+    // Reverb and delay, no noise: their tails ring on, and take nothing new in.
+    PreDropEngine::Depths tails;
+    tails.riser = 0.0f;
+    auto noNoise = oneBar;
+    noNoise.set (Id::dropLevel, 0.0f);
+    const auto quiet  = renderDrop (noNoise, tails);
+    const auto played = renderDrop (noNoise, tails, true);
+    check (rmsOf (quiet.out, 0.2, 0.5) > 0.1f * quiet.inputRms, "the reverb and delay ring on after the drop ("
+               + std::to_string (db (rmsOf (quiet.out, 0.2, 0.5) / quiet.inputRms)).substr (0, 5) + " dB)");
+    float leak = 0.0f;
+    for (size_t i = 0; i < played.out.size(); ++i)
+        leak = std::max (leak, std::abs (played.out[i] - played.in[i] - quiet.out[i]));
+    check (leak < 1.0e-5f, "with nothing new going into them: the drop plays dry over the tails");
+
+    // Only a drop: not a slow turn down, nor a fall from below a build-up.
+    check (peakOf (renderDrop (oneBar, PreDropEngine::Depths {}, false, 2.0).out, 0.2, 3.0) < 1.0e-4f,
+           "turning Amount down over 2 s plays none");
+    check (peakOf (renderDrop (oneBar, PreDropEngine::Depths {}, false, 0.0, 0.4f).out, 0.2, 3.0) < 1.0e-4f,
+           "nor does a fall from 40%");
+    check (peakOf (renderDrop (oneBar, PreDropEngine::Depths {}, false, 0.2).out, 0.2, 0.5) > 1.0e-3f,
+           "a quick fall (within a beat) is a drop too");
+
+    // Amount back up ends it early.
+    {
+        PreDropEngine engine;
+        engine.setEffectSettings (oneBar);
+        engine.setTransport ({ true, 120.0, 0.0, 0.0, 4.0 });
+        engine.prepare (48000.0, 2, 512);
+        juce::AudioBuffer<float> buffer (2, 512);
+        const auto run = [&] (float amount, int blocks, bool sound)
+        {
+            engine.setAmount (amount);
+            float peakOut = 0.0f;
+            for (int b = 0; b < blocks; ++b)
+            {
+                buffer = makeSine (48000.0, 110.0, 512);
+                if (! sound)
+                    buffer.clear();
+                engine.process (buffer);
+                peakOut = std::max (peakOut, buffer.getMagnitude (0, 512));
+            }
+            return peakOut;
+        };
+        run (1.0f, 200, true);
+        run (0.0f, 20, false);           // the drop
+        run (0.3f, 2, false);            // a new build-up starts
+        run (0.0f, 20, false);           // and falls back: not from a build-up's height
+        check (run (0.0f, 20, false) == 0.0f, "turning Amount back up ends it early");
+    }
+}
+
 } // namespace
 
 int main()
@@ -1149,6 +1350,7 @@ int main()
     testEffectSettingsValues();
     testEffectSettingsKeepTheLevel();
     testEffectSettingsSound();
+    testDownlifter();
 
     std::printf ("\n%s\n", failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return failures == 0 ? 0 : 1;

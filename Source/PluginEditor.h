@@ -57,7 +57,7 @@ private:
     // What fills the slot under the chips while this instance is MAIN. An
     // effect's view (RISER, REVERB, DELAY, HIGH-PASS) takes the button row
     // above it too.
-    enum class Reveal { curve, effects, tracks, riser, reverb, delay, hpf };
+    enum class Reveal { curve, effects, tracks, riser, reverb, delay, hpf, drop };
     void setReveal (Reveal newReveal);
     bool showsEffectView() const noexcept;
 
@@ -159,12 +159,15 @@ private:
         explicit EffectViews (PreDropAudioProcessor& p)
             : reverb (p, EffectView::Effect::reverb),
               delay  (p, EffectView::Effect::delay),
-              hpf    (p, EffectView::Effect::hpf) {}
+              hpf    (p, EffectView::Effect::hpf),
+              drop   (p, EffectView::Effect::drop) {}
 
         EffectView       reverb;
         EffectView       delay;
         EffectView       hpf;
+        EffectView       drop;         // the downlifter
         juce::TextButton hpfButton;
+        juce::TextButton dropButton;   // beside TRACKS and EFFECTS
         juce::String     hpfLabel { "?" };   // forces the first update
     };
     EffectViews effectViews;

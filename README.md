@@ -78,6 +78,34 @@ TRACKs and RETURNs use the main's settings. While one of your VST3 plug-ins play
 reverb or delay its view dims these (the plug-in's own window has its settings); its
 source pill sits at the top of the view.
 
+## The downlifter: after the drop
+
+A build-up needs somewhere to land. When Amount **drops**, falling from 50% or more to
+10% or less within a beat (the way your automation falls at the drop), PreDrop plays a
+downlifter over it instead of cutting the build-up off:
+
+- the riser's noise turns around, sweeping down from where the build-up left it and
+  fading out;
+- the reverb and delay stop taking in sound but keep ringing at their build-up level,
+  so the space you built carries across the drop and fades out with the noise;
+- the high-pass opens straight away, so the drop lands with its low end, dry and full.
+
+There's nothing else to automate. Turning Amount down slowly, or from below 50%, isn't
+a drop and plays none, and turning it back up past 10% ends the downlifter early.
+
+The **DOWNLIFTER** button beside TRACKS and EFFECTS opens its settings (it's dimmed
+while switched off):
+
+- **AFTER THE DROP**: on (the default) or off (the drop cuts everything, as before);
+- **LENGTH**: 1/2, 1, 2 (the default) or 4 bars, at the project's tempo and meter;
+- **LEVEL** of the noise: 50% is the riser's own level, 100% is 6 dB louder, and 0%
+  leaves just the reverb and delay tails;
+- **FALL TO**: where the noise ends up (150 Hz by default).
+
+The noise plays on the MAIN, like the riser; linked TRACKs and RETURNs let their own
+reverb and delay ring out. With a riser sample loaded the downlifter is the noise for
+now.
+
 ## Presets
 
 The pill in the header (between the name and MAIN) holds the presets: pick one from
@@ -165,6 +193,7 @@ delays rarely have any).
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
 | **Sources** | The pills under the knobs in EFFECTS: what each effect uses (reverb and delay: *BUILT-IN* or one of your VST3 effects; riser: *NOISE* or your own sample, which you can also drop anywhere on the plugin; high-pass: its slope). Each opens that effect's view. On TRACK / RETURN the reverb and delay pills choose their source directly. |
 | **Effect views** | REVERB, DELAY, HIGH-PASS: the source and the built-in effect's settings (see Shaping the built-in effects above). BACK returns to EFFECTS. |
+| **Downlifter** | The button beside TRACKS and EFFECTS: what plays after the drop, its LENGTH, LEVEL and FALL TO, and AFTER THE DROP to switch it off (see The downlifter above). BACK returns to the curve. |
 | **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above); or, with the noise, its START, END and RESONANCE. BACK returns to EFFECTS. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
@@ -218,6 +247,7 @@ Source/
   PreDropEngine.h            host-agnostic DSP core (the effect chain)
   MacroMapping.h             how Amount and the depths map to each effect's targets, and its calibration
   RiserVoice.h               the riser: the noise sweep or the user's sample, following the signal's level
+  DropRelease.h              the downlifter: notices the drop, then the falling noise and ringing tails
   RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
   RtHandoff.h                lock-free hand-over of objects to the audio thread
   HostedEffect.h             a VST3 effect standing in for the reverb / delay, and its window
@@ -226,7 +256,7 @@ Source/
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
   TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels
   RiserView.h                the RISER view: waveform with bars and beats, the riser's timing controls
-  EffectView.h               the REVERB / DELAY / HIGH-PASS views: source and settings
+  EffectView.h               the REVERB / DELAY / HIGH-PASS / DOWNLIFTER views: source and settings
   SettingKnob.h              a small knob for one effect setting, with its name and value
   PresetButton.h             the header's preset pill and its menu (save, export, import)
 Tests/
@@ -242,8 +272,8 @@ The editor recreates the **"Direction D — Neon Clean"** design natively in JUC
 four effect status chips (the HPF cutoff, and each other effect's Amount × depth), a
 live build-up energy histogram you can also drag to set Amount, Mix / Output sliders,
 the EFFECTS panel of depth knobs, each with its source pill beneath, a view per effect
-for its settings (the RISER view also shows the sample's waveform and timing), and a
-preset pill in the header. Indicator values are derived from Amount and
+for its settings (the RISER view also shows the sample's waveform and timing), the
+DOWNLIFTER's view, and a preset pill in the header. Indicator values are derived from Amount and
 the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
 against `MacroMapping::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).

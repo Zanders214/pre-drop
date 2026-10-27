@@ -17,8 +17,9 @@
 
 /**
     EffectView: the REVERB, DELAY or HIGH-PASS view, opened from the pill under
-    that effect's knob in EFFECTS. It fills the slot below the chips, button
-    row included, like the RISER view.
+    that effect's knob in EFFECTS, or the DOWNLIFTER view, opened from its
+    button beside EFFECTS. It fills the slot below the chips, button row
+    included, like the RISER view.
 
     Along the top: BACK (to EFFECTS), the effect's source (BUILT-IN or a VST3,
     for the reverb and delay) and its name. Below, the built-in effect's
@@ -29,14 +30,14 @@
 class EffectView : public juce::Component
 {
 public:
-    enum class Effect { reverb, delay, hpf };
+    enum class Effect { reverb, delay, hpf, drop };
 
     EffectView (PreDropAudioProcessor& p, Effect which) : processor (p), effect (which)
     {
         using Id = EffectSettings::Id;
         auto& state = p.getState();
 
-        for (auto* b : { &backButton, &syncPill, &pingPongPill, &slopePill })
+        for (auto* b : { &backButton, &syncPill, &pingPongPill, &slopePill, &dropPill })
         {
             b->setLookAndFeel (&pills);
             PreDropLookAndFeel::setCompactPill (*b);
@@ -87,6 +88,15 @@ public:
                 addKnob (Id::hpfResonance, "A peak at the cutoff that sharpens the sweep as it rises.");
                 addToggle (slopePill, Id::hpfSlope, "24 dB SLOPE", "Off: 12 dB per octave, gentle. On: 24 dB, a steeper cut.");
                 break;
+
+            case Effect::drop:
+                addKnob (Id::dropLength, "How long the downlifter lasts after the drop, in bars.");
+                addKnob (Id::dropLevel,  "How loud its noise is: 50% is the riser's level, 0% leaves just the tails.");
+                addKnob (Id::dropEnd,    "Where its noise falls to, from where the riser got to.");
+                addToggle (dropPill, Id::dropOn, "AFTER THE DROP",
+                           "On: when Amount drops (from 50% or more to 10% or less within a beat), the riser falls "
+                           "and the reverb and delay ring out. Off: the drop cuts them off.");
+                break;
         }
         if (source != nullptr)
             addAndMakeVisible (*source);
@@ -96,7 +106,7 @@ public:
 
     ~EffectView() override
     {
-        for (auto* b : { &backButton, &syncPill, &pingPongPill, &slopePill })
+        for (auto* b : { &backButton, &syncPill, &pingPongPill, &slopePill, &dropPill })
             b->setLookAndFeel (nullptr);
     }
 
@@ -126,11 +136,14 @@ public:
             knob (EffectSettings::Id::delayTime)->setVisible (! synced);
         }
 
+        // A plug-in's own settings replace the built-in one's; a downlifter
+        // switched off has none to set.
         const bool builtIn = usesBuiltIn();
+        const bool live    = builtIn && (effect != Effect::drop || dropPill.getToggleState());
         for (const auto& k : knobs)
         {
-            k->setEnabled (builtIn);
-            k->setAlpha (builtIn ? 1.0f : 0.35f);
+            k->setEnabled (live);
+            k->setAlpha (live ? 1.0f : 0.35f);
         }
         for (auto* b : { &syncPill, &pingPongPill })
         {
@@ -148,7 +161,7 @@ public:
     /** True while the built-in effect plays (no plug-in stands in for it). */
     bool usesBuiltIn() const
     {
-        if (effect == Effect::hpf)
+        if (effect == Effect::hpf || effect == Effect::drop)
             return true;
         const auto slot = effect == Effect::reverb ? PreDropAudioProcessor::EffectSlot::reverb
                                                    : PreDropAudioProcessor::EffectSlot::delay;
@@ -167,6 +180,7 @@ public:
     juce::TextButton& sync() noexcept        { return syncPill; }
     juce::TextButton& pingPong() noexcept    { return pingPongPill; }
     juce::TextButton& slope() noexcept       { return slopePill; }
+    juce::TextButton& dropSwitch() noexcept  { return dropPill; }
     EffectSlotButton* sourcePill() noexcept  { return source.get(); }
     juce::String      getNote() const        { return noteText(); }
 
@@ -206,7 +220,7 @@ public:
 
         // Switches along the bottom, the knobs centred above them.
         std::vector<juce::TextButton*> switches;
-        for (auto* b : { &syncPill, &pingPongPill, &slopePill })
+        for (auto* b : { &syncPill, &pingPongPill, &slopePill, &dropPill })
             if (b->isVisible())
                 switches.push_back (b);
         if (! switches.empty())
@@ -249,6 +263,7 @@ private:
         {
             case Effect::reverb: return violet;
             case Effect::delay:  return pink;
+            case Effect::drop:   return amber;
             case Effect::hpf:    break;
         }
         return cyan;
@@ -260,6 +275,7 @@ private:
         {
             case Effect::reverb: return "REVERB";
             case Effect::delay:  return "DELAY";
+            case Effect::drop:   return "DOWNLIFTER";
             case Effect::hpf:    break;
         }
         return "HIGH-PASS";
@@ -284,6 +300,10 @@ private:
                 return "Echoes every " + juce::String (ms) + " ms"
                      + (tempo > 0.0 ? juce::String() : juce::String (" (at 120 BPM until the project plays)")) + ".";
             }
+            case Effect::drop:
+                if (! dropPill.getToggleState())
+                    return "Off: the drop cuts the build-up off.";
+                return "After the drop: the riser falls and the reverb and delay ring out.";
             case Effect::hpf:    break;
         }
         return "Sweeps up from 20 Hz as Amount rises (to the HIGH-PASS depth's top).";
@@ -298,6 +318,7 @@ private:
     juce::TextButton syncPill;
     juce::TextButton pingPongPill;
     juce::TextButton slopePill;
+    juce::TextButton dropPill;
     std::unique_ptr<EffectSlotButton> source;
     std::vector<std::unique_ptr<SettingKnob>> knobs;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> toggles;

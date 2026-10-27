@@ -16,6 +16,8 @@
       - HIGH-PASS: SLOPE (12 or 24 dB per octave) and RESONANCE.
       - RISER (the built-in noise): where its sweep STARTs and ENDs, and its
         RESONANCE.
+      - DOWNLIFTER (after the drop): whether there is one, its LENGTH in bars,
+        its LEVEL and where its noise FALLs TO (see DropRelease).
 
     Each is a plugin parameter (specs lists them, with their ranges and
     defaults, which are the sound PreDrop had before they existed). The values
@@ -30,11 +32,12 @@ struct EffectSettings
         delaySync, delayNote, delayTime, delayFeedback, delayTone, delayPingPong,
         hpfSlope, hpfResonance,
         riserStart, riserEnd, riserResonance,
+        dropOn, dropLength, dropLevel, dropEnd,
         count
     };
     static constexpr size_t count = static_cast<size_t> (Id::count);
 
-    enum class Kind { percent, milliseconds, hertz, toggle, note, slope };
+    enum class Kind { percent, milliseconds, hertz, toggle, note, slope, bars };
 
     struct Spec
     {
@@ -54,6 +57,11 @@ struct EffectSettings
                                                                    "1/4T", "1/4", "1/4D", "1/2", "1/2D", "1/1" };
     static constexpr std::array<double, numNotes> noteQuarters { 0.125, 1.0 / 6.0, 0.25, 0.375, 1.0 / 3.0, 0.5, 0.75,
                                                                  2.0 / 3.0, 1.0, 1.5, 2.0, 3.0, 4.0 };
+
+    // The downlifter's lengths, in bars.
+    static constexpr int numLengths = 4;
+    static constexpr std::array<const char*, numLengths> lengthNames { "1/2 BAR", "1 BAR", "2 BARS", "4 BARS" };
+    static constexpr std::array<double, numLengths> lengthBars { 0.5, 1.0, 2.0, 4.0 };
 
     static constexpr float toneOpenHz       = 20000.0f;   // TONE at the top: no filtering
     static constexpr double maxDelaySeconds = 4.0;        // the longest echo (1/1 at 60 BPM)
@@ -75,6 +83,10 @@ struct EffectSettings
         { "riserStart",     "Riser Start",      "START",     Kind::hertz,        20.0f,   2000.0f,  200.0f,    200.0f },
         { "riserEnd",       "Riser End",        "END",       Kind::hertz,        1000.0f, 16000.0f, 8000.0f,   4000.0f },
         { "riserResonance", "Riser Resonance",  "RESONANCE", Kind::percent,      0.0f,    1.0f,     0.396241f, 0.0f },   // Q 1.5
+        { "dropOn",         "Downlifter",       "DOWNLIFTER", Kind::toggle,      0.0f,    1.0f,     1.0f,      0.0f },
+        { "dropLength",     "Downlifter Length", "LENGTH",   Kind::bars,         0.0f,    3.0f,     2.0f,      0.0f },
+        { "dropLevel",      "Downlifter Level", "LEVEL",     Kind::percent,      0.0f,    1.0f,     0.5f,      0.0f },
+        { "dropEnd",        "Downlifter Fall To", "FALL TO", Kind::hertz,        30.0f,   2000.0f,  150.0f,    200.0f },
     } };
 
     EffectSettings() noexcept
@@ -110,6 +122,12 @@ struct EffectSettings
     /** The high-pass's Q: 0.71 (flat, no peak) up to 8.5 at full resonance. */
     float hpfQ() const noexcept      { return 0.70710678f * std::pow (12.0f, (*this)[Id::hpfResonance]); }
 
+    /** The downlifter's length in bars. */
+    double dropBars() const noexcept
+    {
+        return lengthBars[(size_t) juce::jlimit (0, numLengths - 1, juce::roundToInt ((*this)[Id::dropLength]))];
+    }
+
     /** The riser band-pass's Q: 0.5 (wide) to 8 (a whistle); 1.5 by default. */
     float riserQ() const noexcept    { return 0.5f * std::pow (16.0f, (*this)[Id::riserResonance]); }
 
@@ -123,6 +141,7 @@ struct EffectSettings
             case Kind::toggle:       return value >= 0.5f ? "ON" : "OFF";
             case Kind::note:         return noteNames[(size_t) juce::jlimit (0, numNotes - 1, juce::roundToInt (value))];
             case Kind::slope:        return value >= 0.5f ? "24 dB" : "12 dB";
+            case Kind::bars:         return lengthNames[(size_t) juce::jlimit (0, numLengths - 1, juce::roundToInt (value))];
             case Kind::hertz:        break;
         }
         if (id == Id::delayTone && value >= toneOpenHz - 1.0f)

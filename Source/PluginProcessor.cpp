@@ -83,16 +83,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         const auto& spec = EffectSettings::specs[i];
         const auto  show = [id] (float value, int) { return EffectSettings::format (id, value); };
         using Kind = EffectSettings::Kind;
+        // The downlifter's came later: a higher version, as hosts (AU) ask.
+        const int version = id >= EffectSettings::Id::dropOn ? 2 : 1;
         if (spec.kind == Kind::toggle)
         {
-            layout.add (std::make_unique<AudioParameterBool> (ParameterID { spec.id, 1 }, spec.name, spec.defaultValue >= 0.5f));
+            layout.add (std::make_unique<AudioParameterBool> (ParameterID { spec.id, version }, spec.name, spec.defaultValue >= 0.5f));
         }
-        else if (spec.kind == Kind::note || spec.kind == Kind::slope)
+        else if (spec.kind == Kind::note || spec.kind == Kind::slope || spec.kind == Kind::bars)
         {
             StringArray choices;
             for (int c = juce::roundToInt (spec.min); c <= juce::roundToInt (spec.max); ++c)
                 choices.add (EffectSettings::format (id, (float) c));
-            layout.add (std::make_unique<AudioParameterChoice> (ParameterID { spec.id, 1 }, spec.name, choices,
+            layout.add (std::make_unique<AudioParameterChoice> (ParameterID { spec.id, version }, spec.name, choices,
                                                                 juce::roundToInt (spec.defaultValue)));
         }
         else
@@ -100,7 +102,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
             NormalisableRange range (spec.min, spec.max);
             if (spec.centre > 0.0f)
                 range.setSkewForCentre (spec.centre);
-            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spec.id, 1 }, spec.name, range, spec.defaultValue,
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spec.id, version }, spec.name, range, spec.defaultValue,
                                                                AudioParameterFloatAttributes().withStringFromValueFunction (show)));
         }
     }
@@ -167,8 +169,13 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             return active ? main.depths[(size_t) e].load() * param (ParamID::trackLevel (e)) : 0.0f;
         };
 
+        // Like the riser, the downlifter's noise plays on the main; a track or
+        // return lets its reverb and delay ring on through the drop.
+        auto settings = active ? main.effectSettings() : effectSettingsOf (apvts);
+        settings.set (EffectSettings::Id::dropLevel, 0.0f);
+
         engine.setAmount      (active ? main.amount.load() : 0.0f);
-        engine.setEffectSettings (active ? main.effectSettings() : effectSettingsOf (apvts));
+        engine.setEffectSettings (settings);
         engine.setHpfDepth    (depth (LinkHub::Effect::hpf));
         engine.setReverbDepth (depth (LinkHub::Effect::reverb));
         engine.setDelayDepth  (depth (LinkHub::Effect::delay));

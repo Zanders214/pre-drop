@@ -220,7 +220,7 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 11 + (int) EffectSettings::count, "26 parameters are exposed (11, and the effects' settings)");
+    check (p.getParameters().size() == 11 + (int) EffectSettings::count, "30 parameters are exposed (11, and the effects' settings)");
     check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
@@ -1090,7 +1090,7 @@ void testLinkedProcessing()
     }
 
     setParam (master, "amount", 0.0f);
-    settledChange (guitar, 512, 10);                         // let the ramps settle
+    settledChange (guitar, 512, 400);                        // past the downlifter (2 bars at 120 BPM) and the ramps
     check (settledChange (guitar, 512, 20) == 0.0f, "Amount at 0 on the main returns the tracks to dry");
 
     // Roles survive a save / reload, and so do a track's name and switches.
@@ -1621,9 +1621,9 @@ void testEffectViews()
         if (b->getButtonText() == "TRACKS")  tracks  = b;
         if (b->getComponentID() == "hpfSource") hpfPill = b;
     }
-    check (views.size() == 3 && slots.size() == 2 && effects != nullptr && tracks != nullptr && hpfPill != nullptr,
-           "the editor has the three views and the pills that open them");
-    if (views.size() != 3 || slots.size() != 2 || effects == nullptr || tracks == nullptr || hpfPill == nullptr)
+    check (views.size() == 4 && slots.size() == 2 && effects != nullptr && tracks != nullptr && hpfPill != nullptr,
+           "the editor has the four views and the pills that open them");
+    if (views.size() != 4 || slots.size() != 2 || effects == nullptr || tracks == nullptr || hpfPill == nullptr)
         return;
     auto& reverb = *views[0];
     auto& delay  = *views[1];
@@ -1979,6 +1979,103 @@ void testFactoryPresets()
     }
     folder.deleteRecursively();
 }
+void testDownlifterView()
+{
+    std::printf ("DOWNLIFTER view:\n");
+    using Id = EffectSettings::Id;
+
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    auto* button = dynamic_cast<juce::TextButton*> (editor->findChildWithID ("downlifter"));
+    const auto views = findChildren<EffectView> (*editor);
+    juce::TextButton* effects = nullptr;
+    for (auto* b : findChildren<juce::TextButton> (*editor))
+        if (b->getButtonText() == "EFFECTS")
+            effects = b;
+    check (button != nullptr && views.size() == 4 && effects != nullptr && button->isVisible()
+             && button->getButtonText() == "DOWNLIFTER" && juce::exactlyEqual (button->getAlpha(), 1.0f)
+             && button->getY() == effects->getY() && button->getX() > effects->getRight(),
+           "beside TRACKS and EFFECTS, the DOWNLIFTER button (on by default)");
+    if (button == nullptr || views.size() != 4 || effects == nullptr)
+        return;
+    auto& drop = *views[3];
+
+    button->triggerClick();
+    pumpUntil ([&] { return drop.isVisible(); });
+    check (drop.isVisible() && ! button->isVisible() && ! effects->isVisible() && drop.getY() <= effects->getY(),
+           "it opens the DOWNLIFTER view, over the button row");
+    check (drop.knob (Id::dropLength) != nullptr && drop.knob (Id::dropLevel) != nullptr && drop.knob (Id::dropEnd) != nullptr
+             && drop.knob (Id::reverbSize) == nullptr && drop.sourcePill() == nullptr,
+           "it has LENGTH, LEVEL and FALL TO");
+    if (drop.knob (Id::dropLength) == nullptr)
+        return;
+    check (drop.knob (Id::dropLength)->valueText() == "2 BARS" && drop.dropSwitch().getToggleState()
+             && hasDetail (render (drop)), "the view renders, switched on, 2 bars long");
+
+    drop.knob (Id::dropLength)->slider().setValue (0.0, juce::sendNotificationSync);
+    drop.knob (Id::dropEnd)->slider().setValue (400.0, juce::sendNotificationSync);
+    const auto set = effectSettingsOf (p.getState());
+    check (approx ((float) set.dropBars(), 0.5f, 0.0f) && approx (set[Id::dropEnd], 400.0f, 1.0f),
+           "its knobs set the parameters (1/2 BAR, 400 Hz)");
+
+    drop.dropSwitch().triggerClick();
+    pumpUntil ([&] { return ! drop.knob (Id::dropLevel)->isEnabled(); });
+    check (! effectSettingsOf (p.getState()).isOn (Id::dropOn) && ! drop.knob (Id::dropLevel)->isEnabled()
+             && drop.getNote().startsWith ("Off"), "switching it off sets the parameter and dims its knobs");
+
+    drop.back().triggerClick();
+    pumpUntil ([&] { return button->isVisible() && button->getAlpha() < 1.0f; });
+    check (! drop.isVisible() && button->isVisible() && button->getAlpha() < 1.0f,
+           "BACK returns to the curve, the button dimmed while it's off");
+
+    // It goes with the sound, into presets.
+    check (PresetManager::isSoundParameter ("dropOn") && PresetManager::isSoundParameter ("dropEnd"), "presets keep it");
+}
+
+// Linked: the main plays the downlifter's noise, a track only its own tails.
+void testDownlifterLinked()
+{
+    std::printf ("Linked downlifter:\n");
+    {
+        using Effect = LinkHub::Effect;
+        PreDropAudioProcessor main, track;
+        check (main.getLink().isMain() && track.getLink().followsMain(), "a main and a linked track");
+        for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
+            track.getLink().setLinkLevel (e, 0.0f);
+        for (auto* q : { &main, &track })
+            q->prepareToPlay (48000.0, 512);
+        setParam (main, "riserDepth", 0.0f);   // only the downlifter makes a sound
+
+        juce::MidiBuffer midi;
+        float mainChange = 0.0f, trackChange = 0.0f;
+        const auto run = [&] (int blocks)
+        {
+            for (int b = 0; b < blocks; ++b)
+                for (auto* q : { &main, &track })
+                {
+                    juce::AudioBuffer<float> input (2, 512);
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (int n = 0; n < 512; ++n)
+                            input.setSample (ch, n, 0.5f * std::sin (0.05f * (float) (b * 512 + n)));
+                    auto buffer = input;
+                    q->processBlock (buffer, midi);
+                    float diff = 0.0f;
+                    for (int n = 0; n < 512; ++n)
+                        diff = std::max (diff, std::abs (buffer.getSample (0, n) - input.getSample (0, n)));
+                    (q == &main ? mainChange : trackChange) = std::max (q == &main ? mainChange : trackChange, diff);
+                }
+        };
+        setParam (main, "amount", 1.0f);
+        run (100);
+        mainChange = trackChange = 0.0f;
+        setParam (main, "amount", 0.0f);
+        run (50);
+        check (mainChange > 0.01f, "after the drop the main plays the downlifter");
+        check (trackChange == 0.0f, "a track with its effects off stays untouched: the noise plays once, on the main");
+    }
+}
+
 } // namespace
 
 int main()
@@ -2001,6 +2098,8 @@ int main()
     testRiserTimingState();
     testRiserView();
     testEffectViews();
+    testDownlifterView();
+    testDownlifterLinked();
     testPresets();
     testFactoryPresets();
     testLinkHub();
