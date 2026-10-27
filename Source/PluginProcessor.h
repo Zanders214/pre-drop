@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <atomic>
 
 #include "EffectPlugins.h"
 #include "LinkHub.h"
@@ -81,6 +82,7 @@ private:
     RiserSource   riser { engine };
     EffectPlugins effectPlugins;
     PresetManager presets { *this };
+    std::atomic<double> hostBarLength { 4.0 };   // quarter notes per bar, for the downlifter's tail
     TrackLink     link { apvts };   // last: leaves the link before the rest goes
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessor)

@@ -202,6 +202,7 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const auto transport = readTransport();
     engine.setTransport (transport);
     riser.setHostTempo (transport.bpm);
+    hostBarLength.store (transport.barLength > 0.0 ? transport.barLength : 4.0);
     if (isNonRealtime())
         riser.renderIfStale();   // a bounce can't wait for a background re-render
 
@@ -224,7 +225,20 @@ const juce::String PreDropAudioProcessor::getName() const { return JucePlugin_Na
 bool PreDropAudioProcessor::acceptsMidi() const          { return false; }
 bool PreDropAudioProcessor::producesMidi() const         { return false; }
 bool PreDropAudioProcessor::isMidiEffect() const         { return false; }
-double PreDropAudioProcessor::getTailLengthSeconds() const { return 4.0; }
+// The reverb and delay die away within 4 s once the input stops. A drop's
+// downlifter can last longer (up to 4 bars, at the host's tempo and meter),
+// and a host asks again as they change.
+double PreDropAudioProcessor::getTailLengthSeconds() const
+{
+    constexpr double effectTails = 4.0;
+    const auto settings = effectSettingsOf (apvts);
+    if (! settings.isOn (EffectSettings::Id::dropOn))
+        return effectTails;
+
+    const double tempo  = riser.getHostTempo() > 0.0 ? riser.getHostTempo() : EffectSettings::fallbackBpm;
+    const double length = settings.dropBars() * hostBarLength.load() * 60.0 / tempo;
+    return juce::jmax (effectTails, length + 0.1);   // and the 40 ms ramps after it
+}
 
 int PreDropAudioProcessor::getNumPrograms()              { return 1; }
 int PreDropAudioProcessor::getCurrentProgram()           { return 0; }

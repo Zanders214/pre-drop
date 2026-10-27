@@ -213,7 +213,17 @@ void testProcessorBasics()
     check (p.getName() == "ZandersPreDrop", "plugin reports its product name");
     check (p.hasEditor(), "plugin has an editor");
     check (! p.acceptsMidi() && ! p.producesMidi() && ! p.isMidiEffect(), "plugin is a pure audio effect");
-    check (approx ((float) p.getTailLengthSeconds(), 4.0f, 1.0e-6f), "tail covers the reverb / delay decay");
+    check (approx ((float) p.getTailLengthSeconds(), 4.1f, 1.0e-6f),
+           "tail covers the reverb / delay decay and the downlifter (2 bars at 120 BPM, and its ramps)");
+    setParam (p, "dropLength", 3.0f);
+    check (approx ((float) p.getTailLengthSeconds(), 8.1f, 1.0e-6f), "a 4-bar downlifter lengthens it to 8 s");
+    p.getRiser().setHostTempo (60.0);
+    check (approx ((float) p.getTailLengthSeconds(), 16.1f, 1.0e-6f), "and so does a slower tempo");
+    setParam (p, "dropOn", 0.0f);
+    check (approx ((float) p.getTailLengthSeconds(), 4.0f, 1.0e-6f), "with the downlifter off it's the effects' 4 s");
+    setParam (p, "dropOn", 1.0f);
+    setParam (p, "dropLength", 2.0f);
+    p.getRiser().setHostTempo (0.0);
 
     check (p.getNumPrograms() == 1 && p.getCurrentProgram() == 0, "a single program");
     p.setCurrentProgram (0);
