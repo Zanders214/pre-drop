@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793096922462,
+  "lastUpdate": 1793103389111,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -509,6 +509,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.4,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "13c394b0fa7b7c47c2a8e5167fd8dba10f7a5625",
+          "message": "Merge pull request #19 from Zanders214/claude/effect-settings\n\nEdit the built-in effects in their own views, and save presets",
+          "timestamp": "2026-10-27T13:15:14+01:00",
+          "tree_id": "9dbaa44f4fe0ede68aef6fdd9a8b677fba01a4c3",
+          "url": "https://github.com/Zanders214/pre-drop/commit/13c394b0fa7b7c47c2a8e5167fd8dba10f7a5625"
+        },
+        "date": 1793103388571,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 37178.043,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.349,
             "unit": "%"
           }
         ]
