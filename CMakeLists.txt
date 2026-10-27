@@ -27,6 +27,17 @@ else()
     FetchContent_MakeAvailable(JUCE)
 endif()
 
+# Signalsmith Stretch (MIT): time-stretches a riser sample to the project's
+# tempo while keeping its pitch. Header-only; it pulls in Signalsmith Linear.
+include(FetchContent)
+FetchContent_Declare(signalsmith-stretch
+    GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git
+    GIT_TAG        1.4.0
+    GIT_SHALLOW    TRUE
+    GIT_SUBMODULES ""   # only its command-line tool uses the submodule
+    SYSTEM)             # its headers don't get our warning flags
+FetchContent_MakeAvailable(signalsmith-stretch)
+
 juce_add_plugin(PreDrop
     COMPANY_NAME                "ZandersAudio"
     BUNDLE_ID                   com.zandersaudio.predrop
@@ -72,6 +83,7 @@ target_compile_definitions(PreDrop
 
 target_link_libraries(PreDrop
     PRIVATE
+        signalsmith-stretch
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -143,6 +155,7 @@ if(PREDROP_BUILD_TESTS)
         PREDROP_TEST_VST3="$<GENEX_EVAL:$<TARGET_PROPERTY:PreDrop_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
     add_dependencies(PreDropPluginTests PreDrop_VST3)
     target_link_libraries(PreDropPluginTests PRIVATE
+        signalsmith-stretch
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -186,6 +199,7 @@ if(PREDROP_RT_SANITIZE)
     target_compile_options(rt_check PRIVATE -fsanitize=realtime)
     target_link_options   (rt_check PRIVATE -fsanitize=realtime)
     target_link_libraries(rt_check PRIVATE
+        signalsmith-stretch
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -217,6 +231,7 @@ if(PREDROP_BUILD_BENCH)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JucePlugin_Name="ZandersPreDrop")
     target_link_libraries(perf_bench PRIVATE
+        signalsmith-stretch
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags

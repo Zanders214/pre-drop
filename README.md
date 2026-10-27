@@ -23,10 +23,37 @@ balance holds on quiet and loud material alike.
 
 The riser can be your own sample: open **EFFECTS** and click the pill under the
 **RISER** knob (it says *NOISE*), or drop a WAV / AIFF / FLAC anywhere on the plugin.
-It loops (with a short crossfade so the loop point doesn't click), restarts from the top at the start of each build-up, and plays at
-the same calibrated level as the built-in noise. The file (up to 60 s) is saved
-inside the plugin state, so your Ableton project keeps its riser even if the
-original file moves.
+It plays at the same calibrated level as the built-in noise. The file (up to 60 s)
+is saved inside the plugin state, so your Ableton project keeps its riser even if
+the original file moves.
+
+### Riser timing
+
+That pill opens the **RISER** view: your sample's waveform with its bars (numbered)
+and beats drawn over it, a playhead while it plays, and its timing:
+
+- **BPM** is the sample's own tempo, which places its bars and beats. Drag it up or
+  down, scroll, or double-click to type. A first guess comes from the file name
+  ("128 BPM", "8 Bars") or, failing that, its length.
+- **Drag the waveform** to stretch it against the bars: the point you grab lands where
+  you let go (snapping to beat lines; hold shift to place it freely), which sets the
+  BPM. The loop keeps its bars, so dragging the end of the sound onto a bar line
+  cuts the quiet tail after it.
+- **BARS** (with MATCH PROJECT) is how many bars loop: past them is cut, short of
+  them is silence. Drag the amber loop-end line on the waveform to set it there too.
+  By default it's the whole bars nearest the sample's length.
+- **Meter**: 2/4, 3/4, 4/4, 5/4, 6/8, 7/8 or 12/8.
+- **MATCH PROJECT** (on for a new sample): the riser plays at your project's tempo.
+  When a build-up starts it waits for the next bar line (or starts at once if you're
+  within a sixteenth past one) and loops its BARS; anything past them is shaded
+  and doesn't play.
+  Off, it plays the whole sample at its own speed, looping with a short crossfade.
+- **KEEP PITCH** (with MATCH PROJECT): on, the sample is time-stretched to the
+  project's tempo and keeps its pitch (re-rendered in the background when the tempo
+  changes, straight away when bouncing); off, it plays faster or slower, like tape.
+
+The timing is saved with the sample. Sets saved before riser timing existed keep
+playing their riser at its own speed until you turn MATCH PROJECT on.
 
 ## Choosing which tracks get which effects
 
@@ -85,12 +112,15 @@ delays rarely have any).
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
 | **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
-| **Sources** | The pills under the REVERB, DELAY and RISER knobs in EFFECTS (and under REVERB and DELAY on TRACK / RETURN): what each effect uses. Reverb and delay: *BUILT-IN* or one of your VST3 effects. Riser: *NOISE* or your own sample (drop a WAV / AIFF / FLAC anywhere on the plugin; pick *Use built-in noise* to go back). |
+| **Sources** | The pills under the REVERB, DELAY and RISER knobs in EFFECTS (and under REVERB and DELAY on TRACK / RETURN): what each effect uses. Reverb and delay: *BUILT-IN* or one of your VST3 effects. Riser: *NOISE* or your own sample (drop a WAV / AIFF / FLAC anywhere on the plugin); it opens the RISER view. |
+| **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above). BACK returns to EFFECTS. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
 
-JUCE is pulled automatically via CMake `FetchContent` (pinned to `8.0.4`):
+JUCE is pulled automatically via CMake `FetchContent` (pinned to `8.0.4`), as is
+[Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch)
+(`1.4.0`, MIT licence), which time-stretches the riser sample to the project's tempo:
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -121,7 +151,8 @@ ctest --test-dir build --output-on-failure
 Source/
   PluginProcessor.{h,cpp}    thin host wrapper + parameters (APVTS)
   ParamIDs.h                 the parameter IDs
-  RiserSource.{h,cpp}        the riser sample: loading, saving with the set, feeding the engine
+  RiserSource.{h,cpp}        the riser sample: loading, saving with the set, rendering it for the engine
+  RiserTiming.h              a riser sample's tempo, meter and how it follows the project
   TrackLink.{h,cpp}          this instance's role (MAIN / TRACK / RETURN) and its place in the link
   EffectPlugins.{h,cpp}      the VST3 reverb / delay slots: loading, saving, windows, audio hand-over
   PluginEditor.{h,cpp}       "Neon Clean" editor: knob + chips + curve + sliders
@@ -138,6 +169,7 @@ Source/
   LinkHub.h                  process-wide link between the MAIN and its TRACK / RETURN instances
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
   TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels
+  RiserView.h                the RISER view: waveform with bars and beats, the riser's timing controls
 Tests/
   PreDropEngineTests.cpp        framework-free DSP tests + UI/DSP coupling check
   PreDropVisualModelTests.cpp   framework-free tests for the editor's numeric model
@@ -150,7 +182,8 @@ The editor recreates the **"Direction D — Neon Clean"** design natively in JUC
 (no WebView): a multicolour progress-ring **Amount** knob with a centred readout,
 four effect status chips (the HPF cutoff, and each other effect's Amount × depth), a
 live build-up energy histogram you can also drag to set Amount, Mix / Output sliders,
-and the EFFECTS panel of depth knobs, each with its source pill beneath. Indicator values are derived from Amount and
+the EFFECTS panel of depth knobs, each with its source pill beneath, and the RISER
+view of the riser sample's waveform and timing. Indicator values are derived from Amount and
 the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
 against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).

@@ -573,6 +573,421 @@ void testRiserSampleEditor()
     riserFile.deleteFile();
 }
 
+// ---- Riser timing -----------------------------------------------------------
+bool same (double a, double b, double tolerance = 1.0e-6) { return std::abs (a - b) <= tolerance; }
+
+void testRiserTiming()
+{
+    std::printf ("Riser timing:\n");
+
+    RiserTiming t;
+    check (same (t.quarterNotesPerBar(), 4.0) && same (t.barSeconds(), 2.0) && same (t.beatSeconds(), 0.5),
+           "4/4 at 120: two-second bars of half-second beats");
+    t.beatsPerBar = 6;
+    t.beatUnit    = 8;
+    check (same (t.quarterNotesPerBar(), 3.0) && same (t.beatSeconds(), 0.25), "6/8 bars are three quarter notes of six eighths");
+    t = {};
+    check (t.wholeBarsIn (4.3) == 2 && t.wholeBarsIn (0.4) == 1 && same (t.barsIn (5.0), 2.5), "bars in a length, and whole bars (at least one)");
+    check (same (t.bpmForBars (16.0, 8.0), 120.0) && same (t.bpmForBars (1.0, 64.0), RiserTiming::maxBpm),
+           "the tempo that fits a length to a bar count, within limits");
+    check (t.loopBarsFor (4.3) == 2 && t.loopBarsFor (1000.0) == RiserTiming::maxLoopBars, "the loop is the whole bars nearest the length");
+    t.loopBars = 5;
+    check (t.loopBarsFor (4.3) == 5, "unless its bars are set");
+    t = {};
+    auto other = t;
+    other.keepPitch = false;
+    check (t == RiserTiming {} && t != other, "timings compare by every setting");
+
+    // A first guess from the file's name, or else its length.
+    check (same (RiserTiming::guess ("Big Riser 128 BPM.wav", 15.0).bpm, 128.0), "a tempo in the name (128 BPM)");
+    check (same (RiserTiming::guess ("riser_140bpm.wav", 10.0).bpm, 140.0), "a tempo in the name (140bpm)");
+    check (same (RiserTiming::guess ("Sweep 8 Bars.wav", 16.0).bpm, 120.0), "a bar count in the name, over the length");
+    check (same (RiserTiming::guess ("sweep-4-bar.wav", 6.0).bpm, 160.0), "a bar count in the name (4-bar)");
+    check (same (RiserTiming::guess ("whoosh.wav", 7.5).bpm, 128.0), "else the power-of-two bar count nearest 120 (4 bars at 128)");
+    check (same (RiserTiming::guess ("riser 999 bpm.wav", 8.0).bpm, 120.0), "an impossible tempo in the name is ignored");
+    check (RiserTiming::guess ("x.wav", 0.0) == RiserTiming {}, "nothing to go on: 4/4 at 120");
+}
+
+// `seconds` of a sine at `hz`, for a render request.
+std::shared_ptr<const juce::AudioBuffer<float>> sineAudio (double sampleRate, double hz, double seconds)
+{
+    auto audio = std::make_shared<juce::AudioBuffer<float>> (1, (int) std::lround (sampleRate * seconds));
+    for (int n = 0; n < audio->getNumSamples(); ++n)
+        audio->setSample (0, n, 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * hz * n / sampleRate));
+    return audio;
+}
+
+// A tone's frequency, from its rising zero crossings across the middle half.
+double frequencyOf (const juce::AudioBuffer<float>& audio, double sampleRate)
+{
+    const int from = audio.getNumSamples() / 4;
+    const int to   = 3 * audio.getNumSamples() / 4;
+    int first = -1;
+    int last  = -1;
+    int crossings = 0;
+    for (int n = from + 1; n < to; ++n)
+        if (audio.getSample (0, n - 1) < 0.0f && audio.getSample (0, n) >= 0.0f)
+        {
+            if (first < 0)
+                first = n;
+            else
+                ++crossings;
+            last = n;
+        }
+    return crossings > 0 ? crossings * sampleRate / (last - first) : 0.0;
+}
+
+void testRiserRendering()
+{
+    std::printf ("Riser rendering:\n");
+    constexpr double sr = 48000.0;
+
+    // Two 4/4 bars at 120 and a little over, of a 440 Hz tone.
+    RiserSource::Request r;
+    r.audio      = sineAudio (sr, 440.0, 4.3);
+    r.sourceRate = sr;
+    r.engineRate = sr;
+    r.timing.matchProject = false;
+
+    const auto own = RiserSource::render (r);
+    check (own != nullptr && own->tempo <= 0.0 && own->length() > (int) (4.0 * sr),
+           "at its own tempo the whole sample plays, at normal speed");
+
+    r.timing.matchProject = true;
+    r.hostTempo = 150.0;
+    const auto kept = RiserSource::render (r);
+    check (kept != nullptr && same (kept->tempo, 150.0) && std::abs (kept->length() - (int) (3.2 * sr)) <= 1,
+           "keeping its pitch, two whole bars are stretched to two bars at the project's tempo");
+    check (kept != nullptr && std::abs (frequencyOf (kept->audio, sr) - 440.0) < 3.0,
+           "and keep their pitch (" + juce::String (kept != nullptr ? frequencyOf (kept->audio, sr) : 0.0, 1).toStdString() + " Hz)");
+
+    r.timing.keepPitch = false;
+    const auto tape = RiserSource::render (r);
+    check (tape != nullptr && same (tape->tempo, 120.0) && tape->length() == (int) (4.0 * sr),
+           "with the pitch following, two whole bars at its own tempo, for the engine to speed up");
+
+    r.timing.keepPitch = true;
+    r.hostTempo = 0.0;
+    const auto waiting = RiserSource::render (r);
+    check (waiting != nullptr && same (waiting->tempo, 120.0), "with no project tempo yet, it plays at its own");
+
+    r.audio = sineAudio (sr, 440.0, 3.8);
+    const auto padded = RiserSource::render (r);
+    check (padded != nullptr && padded->length() == (int) (4.0 * sr)
+               && std::abs (padded->audio.getSample (0, padded->length() - 100)) < 1.0e-6f,
+           "a sample a little short of whole bars is padded to them with silence");
+
+    r.timing.loopBars = 3;
+    const auto threeBars = RiserSource::render (r);
+    r.timing.loopBars = 1;
+    const auto oneBar = RiserSource::render (r);
+    check (threeBars != nullptr && threeBars->length() == (int) (6.0 * sr) && oneBar != nullptr && oneBar->length() == (int) (2.0 * sr),
+           "a set number of bars loops, padded or cut");
+    r.timing.loopBars = 0;
+
+    r.engineRate = 44100.0;
+    r.hostTempo  = 150.0;
+    const auto resampled = RiserSource::render (r);
+    check (resampled != nullptr && std::abs (resampled->length() - (int) (3.2 * 44100.0)) <= 2,
+           "it is built at the host's sample rate");
+
+    r.audio = nullptr;
+    check (RiserSource::render (r) == nullptr, "nothing to render without a sample");
+}
+
+// A host playhead in 4/4 at a tempo and position the test moves along.
+struct BarPlayHead : juce::AudioPlayHead
+{
+    double bpm = 120.0;
+    double ppq = 0.0;
+
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setTimeInSamples (0);
+        info.setIsPlaying (true);
+        info.setBpm (bpm);
+        info.setPpqPosition (ppq);
+        info.setTimeSignature (juce::AudioPlayHead::TimeSignature { 4, 4 });
+        info.setPpqPositionOfLastBarStart (std::floor (ppq / 4.0) * 4.0);
+        return info;
+    }
+};
+
+void testRiserFollowsProject()
+{
+    std::printf ("Riser and the project:\n");
+
+    const auto file = writeWav ("predrop riser 120 BPM.wav", 48000.0, 4.0, 2);
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    p.getRiser().load (file);
+    setParam (p, "amount", 1.0f);
+
+    // Halfway through a bar: the riser waits for the next one (a second away).
+    BarPlayHead head;
+    head.ppq = 2.0;
+    p.setPlayHead (&head);
+    juce::MidiBuffer midi;
+    juce::AudioBuffer<float> buffer (2, 512);
+    int firstPlaying = -1;
+    for (int b = 0; b < 100 && firstPlaying < 0; ++b)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < 512; ++n)
+                buffer.setSample (ch, n, 0.3f * std::sin (0.05f * (float) (b * 512 + n)));
+        p.processBlock (buffer, midi);
+        head.ppq += 512 * head.bpm / (60.0 * 48000.0);
+        if (p.getRiserPlayhead() >= 0.0f)
+            firstPlaying = b;
+    }
+    check (firstPlaying == 93, "the riser starts on the host's next bar line (block " + std::to_string (firstPlaying) + ")");
+    check (same (p.getRiser().getHostTempo(), 120.0), "the project's tempo reaches the riser");
+
+    // The project's tempo moves: a bounce re-renders straight away, playback
+    // in the background.
+    p.setNonRealtime (true);
+    head.bpm = 150.0;
+    p.processBlock (buffer, midi);
+    p.setNonRealtime (false);
+    head.bpm = 140.0;
+    p.processBlock (buffer, midi);
+    p.getRiser().update();
+    check (p.getRiser().waitForRender (10000), "a tempo change re-renders in the background");
+    p.getRiser().update();   // nothing more to do
+    p.processBlock (buffer, midi);
+    bool finite = true;
+    for (int n = 0; n < 512; ++n)
+        finite = finite && std::isfinite (buffer.getSample (0, n));
+    check (finite, "and plays on");
+
+    // A bounce starting while a timing change is still rendering in the
+    // background renders it there and then. Here: from following the project
+    // like tape (150 over 120, 1.25x) to its own speed (1x).
+    p.setNonRealtime (true);
+    setParam (p, "amount", 0.0f);
+    for (int b = 0; b < 10; ++b)
+        p.processBlock (buffer, midi);   // the riser stops, back to the top
+    auto t = p.getRiser().getTiming();
+    t.keepPitch = false;
+    p.getRiser().setTiming (t);
+    p.processBlock (buffer, midi);
+    t.matchProject = false;
+    p.getRiser().setTiming (t);          // queued in the background
+    setParam (p, "amount", 1.0f);
+    for (int b = 0; b < 10; ++b)
+        p.processBlock (buffer, midi);
+    const float ownSpeed = 5120.0f / (4.0f * 48000.0f);
+    check (p.getRiserPlayhead() > 0.9f * ownSpeed && p.getRiserPlayhead() < 1.1f * ownSpeed,
+           "a bounce plays the newest timing, not one still rendering");
+    p.setNonRealtime (false);
+    p.getRiser().waitForRender (10000);
+
+    p.setPlayHead (nullptr);
+    file.deleteFile();
+}
+
+void testRiserTimingState()
+{
+    std::printf ("Riser timing (saved):\n");
+
+    const auto file = writeWav ("predrop riser 100 BPM.wav", 48000.0, 4.8, 2);
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    p.getRiser().load (file);
+    auto t = p.getRiser().getTiming();
+    check (same (t.bpm, 100.0) && t.matchProject && t.keepPitch, "a loaded sample's tempo is guessed, and it follows the project");
+    check (same (p.getRiser().getLengthSeconds(), 4.8, 1.0e-3) && ! p.getRiser().getOutline().high.empty(),
+           "its length and outline are there to draw");
+
+    t.beatsPerBar = 3;
+    t.keepPitch   = false;
+    t.loopBars    = 3;
+    p.getRiser().setTiming (t);
+    check (p.getRiser().waitForRender (10000) && p.getRiser().getTiming() == t, "the timing can be changed");
+
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    PreDropAudioProcessor restored;
+    restored.setStateInformation (state.getData(), (int) state.getSize());
+    check (restored.getRiser().getTiming() == t, "the timing is saved with the sample");
+
+    // Sets saved before riser timing existed keep playing as they did.
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    auto* sample = xml != nullptr ? xml->getChildByName (RiserSource::stateTag) : nullptr;
+    check (sample != nullptr, "the sample is in the saved state");
+    if (sample == nullptr)
+        return;
+    for (const auto* name : { "bpm", "beatsPerBar", "beatUnit", "matchProject", "keepPitch", "loopBars" })
+        sample->removeAttribute (name);
+    juce::MemoryBlock oldState;
+    juce::AudioProcessor::copyXmlToBinary (*xml, oldState);
+    PreDropAudioProcessor old;
+    old.setStateInformation (oldState.getData(), (int) oldState.getSize());
+    check (! old.getRiser().getTiming().matchProject && same (old.getRiser().getTiming().bpm, 100.0),
+           "an older set's riser plays at its own tempo (" + juce::String (old.getRiser().getTiming().bpm).toStdString() + ")");
+
+    file.deleteFile();
+}
+
+void testRiserView()
+{
+    std::printf ("RISER view:\n");
+
+    const auto file = writeWav ("predrop view riser 120 BPM.wav", 48000.0, 4.0, 2);
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    auto* ed   = dynamic_cast<PreDropAudioProcessorEditor*> (editor.get());
+    auto* view = findChild<RiserView> (*editor);
+    juce::TextButton* effects = nullptr;
+    juce::TextButton* tracks  = nullptr;
+    juce::TextButton* pill    = nullptr;
+    for (auto* b : findChildren<juce::TextButton> (*editor))
+    {
+        if (b->getButtonText() == "EFFECTS") effects = b;
+        if (b->getButtonText() == "TRACKS")  tracks  = b;
+        if (b->getComponentID() == "riserSource") pill = b;
+    }
+    check (ed != nullptr && view != nullptr && effects != nullptr && tracks != nullptr && pill != nullptr,
+           "the editor has the RISER view and the pill that opens it");
+    if (ed == nullptr || view == nullptr || effects == nullptr || tracks == nullptr || pill == nullptr)
+        return;
+
+    check (! view->isVisible(), "the view starts hidden");
+    effects->triggerClick();
+    pumpMessages (30);
+    pill->triggerClick();
+    pumpMessages (30);
+    check (view->isVisible() && ! effects->isVisible() && ! tracks->isVisible() && view->getY() <= effects->getY(),
+           "the riser's source pill opens the RISER view, over the button row");
+    check (view->source().getButtonText() == "NOISE" && ! view->tempo().isVisible() && ! view->match().isVisible(),
+           "with the built-in noise there is no timing to set");
+    check (hasDetail (render (*view)), "the noise view renders");
+
+    view->loadFile (file);
+    check (p.getRiser().getName() == file.getFileName() && view->source().getToggleState() && view->tempo().isVisible(),
+           "loading a sample shows it, with its timing");
+    check (same (view->tempo().getValue(), 120.0) && same (view->bars().getValue(), 2.0) && view->meter().getButtonText() == "4/4",
+           "the tempo, bar count and meter shown are the sample's");
+    check (view->getStatus() == "NO PROJECT TEMPO", "until the host says, the project's tempo is unknown");
+    p.getRiser().setHostTempo (128.0);
+    view->refresh();
+    check (view->getStatus() == "PROJECT 128 BPM", "then it shows the project's tempo");
+    check (hasDetail (render (*view)), "the sample view renders");
+
+    view->tempo().setValue (100.0, juce::sendNotificationSync);
+    check (same (p.getRiser().getTiming().bpm, 100.0) && same (view->bars().getValue(), 2.0),
+           "BPM sets the sample's tempo; it loops the whole bars nearest its length");
+    view->bars().setValue (4.0, juce::sendNotificationSync);
+    check (p.getRiser().getTiming().loopBars == 4 && same (p.getRiser().getTiming().bpm, 100.0)
+               && same (view->wave().loopSeconds(), 4 * 2.4),
+           "BARS sets how many bars loop");
+    view->setMeter (3, 4);
+    check (p.getRiser().getTiming().beatsPerBar == 3 && view->meter().getButtonText() == "3/4" && same (view->bars().getValue(), 4.0),
+           "the meter changes the bars, not how many loop");
+
+    view->match().triggerClick();
+    pumpMessages (30);
+    check (! p.getRiser().getTiming().matchProject && ! view->keepPitch().isEnabled() && ! view->bars().isEnabled()
+               && view->getStatus() == "OWN TEMPO",
+           "MATCH PROJECT off: its own tempo; BARS and KEEP PITCH don't apply");
+    view->match().triggerClick();
+    pumpMessages (30);
+    view->keepPitch().triggerClick();
+    pumpMessages (30);
+    check (p.getRiser().getTiming().matchProject && ! p.getRiser().getTiming().keepPitch && view->keepPitch().isEnabled(),
+           "MATCH PROJECT on again; KEEP PITCH off lets the pitch follow");
+
+    // The number chips: drag, scroll, type.
+    check (NumberChip::format (128.0) == "128" && NumberChip::format (127.5) == "127.5" && NumberChip::format (99.254) == "99.25",
+           "numbers show without trailing zeros");
+    auto& chip = view->tempo();
+    chip.setValue (120.0, juce::sendNotificationSync);
+    chip.mouseDown (mouseAt (chip, { 20.0f, 7.0f }, false));
+    chip.mouseDrag (mouseAt (chip, { 20.0f, -33.0f }, true, juce::Point (20.0f, 7.0f)));
+    chip.mouseUp (mouseAt (chip, { 20.0f, -33.0f }, true, juce::Point (20.0f, 7.0f)));
+    check (same (p.getRiser().getTiming().bpm, 130.0), "dragging up 40 px adds 10 BPM, in whole steps ("
+                                                           + juce::String (p.getRiser().getTiming().bpm).toStdString() + ")");
+    juce::MouseWheelDetails wheel {};
+    wheel.deltaY = 0.2f;
+    chip.mouseWheelMove (mouseAt (chip, { 20.0f, 7.0f }, false), wheel);
+    check (same (p.getRiser().getTiming().bpm, 131.0), "a wheel notch is one step");
+    wheel.deltaY  = 0.03f;
+    wheel.isSmooth = true;
+    chip.mouseWheelMove (mouseAt (chip, { 20.0f, 7.0f }, false), wheel);
+    const bool heldBack = same (p.getRiser().getTiming().bpm, 131.0);
+    chip.mouseWheelMove (mouseAt (chip, { 20.0f, 7.0f }, false), wheel);
+    check (heldBack && same (p.getRiser().getTiming().bpm, 132.0), "a trackpad's small moves add up to a step");
+    wheel.deltaY = 0.0f;
+    chip.mouseWheelMove (mouseAt (chip, { 20.0f, 7.0f }, false), wheel);
+    chip.entryLabel().setText ("99.5", juce::sendNotificationSync);
+    check (same (p.getRiser().getTiming().bpm, 99.5), "a typed value is taken as it is");
+
+    // The waveform: the loop is whole bars; the playhead shows where it is.
+    view->setMeter (4, 4);
+    view->tempo().setValue (120.0, juce::sendNotificationSync);
+    view->bars().setValue (2.0, juce::sendNotificationSync);
+    auto& wave = view->wave();
+    check (same (wave.loopSeconds(), 4.0) && same (wave.spanBars(), 2.0), "the drawn loop is the whole bars that play");
+
+    // Dragging the sound stretches it: the point held (a bar in, two seconds)
+    // lands on the beat line it's let go near, and the loop keeps its bars.
+    const float midY = (float) wave.getHeight() * 0.6f;
+    const auto dragWave = [&] (float from, float to)
+    {
+        wave.mouseDown (mouseAt (wave, { from, midY }, false));
+        wave.mouseDrag (mouseAt (wave, { to, midY }, true, juce::Point (from, midY)));
+        const double heldSpan = wave.spanBars();
+        wave.mouseUp (mouseAt (wave, { to, midY }, true, juce::Point (from, midY)));
+        return heldSpan;
+    };
+    wave.mouseMove (mouseAt (wave, { wave.xOfBars (1.0), midY }, false));
+    check (wave.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::DraggingHandCursor), "the sound can be grabbed");
+    const double heldSpan = dragWave (wave.xOfBars (1.0), wave.xOfBars (1.5) + 2.0f);
+    check (same (p.getRiser().getTiming().bpm, 180.0) && p.getRiser().getTiming().loopBars == 2 && same (heldSpan, 2.0),
+           "dragging the sound stretches it onto a beat, the bars held still ("
+               + juce::String (p.getRiser().getTiming().bpm).toStdString() + " BPM)");
+    check (same (wave.spanBars(), 3.0), "after the drag the view spans the stretched sample");
+
+    // ... and its loop end sets how many bars loop.
+    wave.mouseMove (mouseAt (wave, { wave.xOfBars (2.0), midY }, false));
+    check (wave.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::LeftRightResizeCursor), "the loop end can be grabbed");
+    dragWave (wave.xOfBars (2.0), wave.xOfBars (3.0) - 4.0f);
+    check (p.getRiser().getTiming().loopBars == 3 && same (view->bars().getValue(), 3.0), "dragging the loop end sets the bars that loop");
+
+    dragWave (1.0f, wave.xOfBars (2.0));
+    check (same (p.getRiser().getTiming().bpm, 180.0), "the very start can't be stretched");
+    const auto still = render (*view);
+    wave.setPlayhead (0.5f);
+    check (same (wave.getPlayhead(), 0.5) && pixelsChanged (still, render (*view)) > 0, "the playhead is drawn");
+    view->refresh();
+    check (wave.getPlayhead() < 0.0f, "and follows the riser (not playing here)");
+
+    // Many bars: numbered every few, with no beat lines.
+    const auto longFile = writeWav ("predrop long riser.wav", 8000.0, 40.0, 1);
+    view->loadFile (longFile);
+    view->match().triggerClick();   // its own tempo: nothing to stretch
+    pumpMessages (30);
+    view->tempo().setValue (300.0, juce::sendNotificationSync);
+    check (view->bars().getValue() > 40.0 && hasDetail (render (*view)), "a long sample's many bars render");
+
+    editor->setSize (720, 1080);
+    check (view->getWidth() > 600 && hasDetail (render (*view)), "the view scales with the editor");
+
+    view->back().triggerClick();
+    pumpMessages (30);
+    check (! view->isVisible() && effects->isVisible() && effects->getToggleState(), "BACK returns to EFFECTS");
+
+    ed->filesDropped ({ file.getFullPathName() }, 10, 10);
+    check (view->isVisible() && p.getRiser().getName() == file.getFileName(), "dropping a sample opens the RISER view on it");
+    check (pumpUntil ([&] { return pill->getToggleState(); }), "and the pill under the knob shows it");
+
+
+    file.deleteFile();
+    longFile.deleteFile();
+}
+
 // ---- Linking: MAIN on the master, TRACKs on chosen tracks -------------------
 juce::AudioProcessor::TrackProperties hostTrack (const juce::String& name)
 {
@@ -1202,6 +1617,11 @@ int main()
     testBuildUpCurveDrag();
     testRiserSampleLoading();
     testRiserSampleEditor();
+    testRiserTiming();
+    testRiserRendering();
+    testRiserFollowsProject();
+    testRiserTimingState();
+    testRiserView();
     testLinkHub();
     testLinkedProcessing();
     testLinkingEditors();

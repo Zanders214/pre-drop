@@ -438,6 +438,75 @@ void testRiserSample()
         check (riserSum > 0.0, "a build-up starts the sample from the top after silence");
     }
 
+    // Following the project, a sample (here one 4/4 bar at 120, two seconds)
+    // starts on the host's next bar line and plays at the project's tempo
+    // over its own. The playhead shows where it is in its loop, or -1 before.
+    {
+        constexpr double sr = 48000.0;
+        constexpr int block = 512;
+        constexpr float loop = 96000.0f;
+        const auto playheads = [&] (PreDropEngine::Transport transport, int blocks)
+        {
+            PreDropEngine engine;
+            engine.setRiserDepth (1.0f);
+            engine.setAmount (1.0f);
+            engine.setRiserSample (RiserSample::create (noiseSample (1, (int) loop, 9), sr, sr, "bar", 120.0, 2.0));
+            engine.prepare (sr, 1, block);
+
+            std::vector<float> heads;
+            for (int b = 0; b < blocks; ++b)
+            {
+                engine.setTransport (transport);
+                auto buffer = makeSine (sr, 220.0, block, 1);
+                engine.process (buffer);
+                heads.push_back (engine.getRiserPlayhead());
+                transport.ppq += block * transport.bpm / (60.0 * sr);
+            }
+            return heads;
+        };
+
+        // Halfway through a bar: the next bar line is one second (48000 samples) away.
+        const auto midBar = playheads ({ true, 120.0, 2.0, 0.0, 4.0 }, 100);
+        check (midBar[92] < 0.0f && midBar[93] >= 0.0f, "mid-bar, the riser waits for the next bar line");
+        check (approx (midBar[99], (100.0f * block - 48000.0f) / loop, 1.0e-4f), "and plays from the top from there");
+
+        // A moment (a tenth of a beat) past a bar line: it starts now, that far in.
+        const auto late = playheads ({ true, 120.0, 4.1, 4.0, 4.0 }, 1);
+        check (approx (late[0], (2400.0f + block) / loop, 1.0e-4f), "just past a bar line it starts at once, in step");
+
+        // Stopped: it starts at once, at the project's tempo (150 over its 120).
+        const auto stopped = playheads ({ false, 150.0, 0.0, 0.0, 4.0 }, 10);
+        check (approx (stopped[9], 10.0f * block * 1.25f / loop, 1.0e-4f), "with the transport stopped it starts at once, at the project's tempo");
+
+        // A sample with no tempo of its own plays at normal speed whatever the project's.
+        PreDropEngine engine;
+        engine.setRiserDepth (1.0f);
+        engine.setAmount (1.0f);
+        engine.setRiserSample (RiserSample::create (noiseSample (1, (int) loop, 9), sr, sr, "free"));
+        engine.prepare (sr, 1, block);
+        engine.setTransport ({ false, 150.0, 0.0, 0.0, 4.0 });
+        auto buffer = makeSine (sr, 220.0, block, 1);
+        engine.process (buffer);
+        const float freeHead = engine.getRiserPlayhead();
+        check (freeHead > 0.95f * block / loop && freeHead < 1.1f * block / loop,   // its loop is a little shorter (crossfaded)
+               "a sample at its own tempo ignores the project's");
+
+        // ... and its bars: mid-bar in a playing project it starts at once, from the top.
+        PreDropEngine midBarEngine;
+        midBarEngine.setRiserDepth (1.0f);
+        midBarEngine.setAmount (1.0f);
+        midBarEngine.setRiserSample (RiserSample::create (noiseSample (1, (int) loop, 9), sr, sr, "free"));
+        midBarEngine.prepare (sr, 1, block);
+        midBarEngine.setTransport ({ true, 120.0, 2.0, 0.0, 4.0 });
+        auto midBarBuffer = makeSine (sr, 220.0, block, 1);
+        midBarEngine.process (midBarBuffer);
+        check (approx (midBarEngine.getRiserPlayhead(), freeHead, 1.0e-6f),
+               "a sample at its own tempo starts at once, not on the next bar");
+        engine.setAmount (0.0f);
+        engine.reset();
+        check (engine.getRiserPlayhead() < 0.0f, "a reset clears the playhead");
+    }
+
     // Swapping samples in and out while running stays finite, and the
     // swapped-out sample is handed back for the message thread to free.
     PreDropEngine engine;

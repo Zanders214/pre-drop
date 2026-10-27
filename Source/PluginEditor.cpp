@@ -39,6 +39,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     : AudioProcessorEditor (&p),
       processorRef (p),
       buildUpCurve (p.getState(), "amount"),
+      riserUi (p),
       slotButtons (p, lnf),
       link (p)
 {
@@ -95,15 +96,18 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     // its bounds; the editor repaints whenever a glow switches on or off.
     effectsButton.setPaintingIsUnclipped (true);
 
-    // --- RISER sample pill ----------------------------------------------------
+    // --- RISER sample pill and view ------------------------------------------
     // The riser's source (noise or a sample) sits under the RISER knob in the
-    // EFFECTS panel, like the reverb's and delay's sources under theirs.
+    // EFFECTS panel, like the reverb's and delay's sources under theirs; it
+    // opens the RISER view, whose BACK returns to EFFECTS.
     riserUi.button.setLookAndFeel (&lnf);
     PreDropLookAndFeel::setCompactPill (riserUi.button);
     riserUi.button.setComponentID ("riserSource");
     riserUi.button.setPaintingIsUnclipped (true);
-    riserUi.button.onClick = [this] { showRiserMenu(); };
+    riserUi.button.onClick = [this] { setReveal (Reveal::riser); };
     addChildComponent (riserUi.button);   // shown with the EFFECTS panel
+    riserUi.view.onBack = [this] { setReveal (Reveal::effects); };
+    addChildComponent (riserUi.view);
     updateRiserButton();
 
     // --- Linking: TRACKS reveal toggle, MAIN / TRACK pill, the two panels -----
@@ -186,7 +190,14 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
     slotButtons.reverb.setVisible (main && reveal == Reveal::effects);
     slotButtons.delay.setVisible (main && reveal == Reveal::effects);
     riserUi.button.setVisible (main && reveal == Reveal::effects);
+    riserUi.view.setVisible (main && reveal == Reveal::riser);
     link.matrix.setVisible (main && reveal == Reveal::tracks);
+
+    // The RISER view covers the TRACKS / EFFECTS row (it has its own BACK).
+    effectsButton.setVisible (main && reveal != Reveal::riser);
+    link.tracksButton.setVisible (main && reveal != Reveal::riser);
+    if (riserUi.view.isVisible())
+        riserUi.view.refresh();
 
     effectsButton.setToggleState (reveal == Reveal::effects, juce::dontSendNotification);
     link.tracksButton.setToggleState (reveal == Reveal::tracks, juce::dontSendNotification);
@@ -237,8 +248,6 @@ void PreDropAudioProcessorEditor::applyRole()
     link.roleButton.setButtonText (roleNames[(size_t) link.shownRole]);
     link.roleButton.setToggleState (track, juce::dontSendNotification);
 
-    effectsButton.setVisible (! track);
-    link.tracksButton.setVisible (! track);
     link.panel.setReturnMode (ret);
     link.panel.setVisible (track);
 
@@ -303,52 +312,8 @@ void PreDropAudioProcessorEditor::updateRiserButton()
     riserUi.button.setToggleState (name.isNotEmpty(), juce::dontSendNotification);
     fitRiserLabel();
     repaint();   // the lit pill's glow reaches beyond the button
-    riserUi.button.setTooltip (name.isEmpty() ? "Built-in noise riser. Click, or drop an audio file here, to use your own sample."
-                                              : "Riser sample: " + name);
-}
-
-void PreDropAudioProcessorEditor::showRiserMenu()
-{
-    juce::PopupMenu menu;
-    menu.addItem (1, "Load riser sample...");
-    menu.addItem (2, "Use built-in noise", processorRef.getRiser().getName().isNotEmpty());
-
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&riserUi.button),
-                        [safe = juce::Component::SafePointer (this)] (int choice)
-    {
-        if (safe == nullptr)
-            return;
-
-        if (choice == 2)
-        {
-            safe->processorRef.getRiser().clear();
-            safe->updateRiserButton();
-        }
-        else if (choice == 1)
-        {
-            safe->chooseRiserFile();
-        }
-    });
-}
-
-void PreDropAudioProcessorEditor::chooseRiserFile()
-{
-    riserUi.chooser = std::make_unique<juce::FileChooser> ("Choose a riser sample", juce::File(),
-                                                           processorRef.getRiser().getFileWildcard());
-    riserUi.chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                                  [safe = juce::Component::SafePointer (this)] (const juce::FileChooser& chooser)
-    {
-        if (safe != nullptr && chooser.getResult().existsAsFile())
-            safe->loadRiser (chooser.getResult());
-    });
-}
-
-void PreDropAudioProcessorEditor::loadRiser (const juce::File& file)
-{
-    if (const auto error = processorRef.getRiser().load (file); error.isNotEmpty())
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Couldn't use that riser", error);
-
-    updateRiserButton();
+    riserUi.button.setTooltip (name.isEmpty() ? "Built-in noise riser. Click to load your own sample (or drop an audio file here)."
+                                              : "Riser sample: " + name + ". Click to set its tempo and meter.");
 }
 
 void PreDropAudioProcessorEditor::fitRiserLabel()
@@ -383,7 +348,9 @@ void PreDropAudioProcessorEditor::filesDropped (const juce::StringArray& files, 
 {
     riserUi.dragActive = false;
     repaint();
-    loadRiser (juce::File (files[0]));
+    setReveal (Reveal::riser);   // show the sample that just arrived
+    riserUi.view.loadFile (juce::File (files[0]));
+    updateRiserButton();
 }
 
 void PreDropAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
@@ -408,6 +375,8 @@ void PreDropAudioProcessorEditor::timerCallback()
 
     if ((int) processorRef.getLink().getRole() != link.shownRole)
         applyRole();
+    if (riserUi.view.isVisible())
+        riserUi.view.refresh();
     if (link.matrix.isVisible())
         link.matrix.refresh();
     if (link.panel.isVisible())
@@ -616,6 +585,8 @@ void PreDropAudioProcessorEditor::resized()
     // A TRACK has no button row: its panel takes the row and the slot.
     link.panel.setUiScale (s);
     link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
+    riserUi.view.setUiScale (s);
+    riserUi.view.setBounds (layout.reveal.withTop (buttonRowTop));
 
     // Lay out the four depth dials across the reveal slot (used when open): each
     // column is an arc on top, its name + value beneath, and under those the
