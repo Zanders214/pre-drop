@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793093403224,
+  "lastUpdate": 1793096922462,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -475,6 +475,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.286,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6645918fbfded8f31ab52c9d9bf66dcf312774f7",
+          "message": "Merge pull request #18 from Zanders214/claude/riser-timing\n\nRiser timing: tempo, meter, bar-locked playback and a RISER view",
+          "timestamp": "2026-10-27T11:27:16+01:00",
+          "tree_id": "d652fa517062bd3b0da625ed41bd7541a8d7bd73",
+          "url": "https://github.com/Zanders214/pre-drop/commit/6645918fbfded8f31ab52c9d9bf66dcf312774f7"
+        },
+        "date": 1793096921976,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 42652.046,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.4,
             "unit": "%"
           }
         ]
