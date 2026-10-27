@@ -6,6 +6,7 @@
 #include "EffectPlugins.h"
 #include "LinkHub.h"
 #include "PreDropEngine.h"
+#include "PresetManager.h"
 #include "RiserSource.h"
 #include "TrackLink.h"
 
@@ -15,10 +16,11 @@
     Thin host wrapper around PreDropEngine. It owns the parameter state and feeds
     the engine's macro controls each block; all DSP lives in PreDropEngine.
 
-    Three parts sit beside the engine, each in its own class:
+    Four parts sit beside the engine, each in its own class:
       - the riser sample, saved inside the plugin state (RiserSource);
       - this instance's place in the track link: MAIN, TRACK or RETURN (TrackLink);
-      - the optional VST3 reverb and delay (EffectPlugins).
+      - the optional VST3 reverb and delay (EffectPlugins);
+      - the presets, saved as files (PresetManager).
 */
 class PreDropAudioProcessor : public juce::AudioProcessor,
                               private juce::Timer
@@ -64,9 +66,13 @@ public:
     TrackLink&       getLink() noexcept          { return link; }
     const TrackLink& getLink() const noexcept    { return link; }
     EffectPlugins&   getEffectPlugins() noexcept { return effectPlugins; }
+    PresetManager&   getPresets() noexcept       { return presets; }
 
     /** Where the riser sample is in its loop (0..1), or -1 while it isn't playing. */
     float getRiserPlayhead() const noexcept { return engine.getRiserPlayhead(); }
+
+    /** This instance's effect settings, from its parameters. */
+    EffectSettings getEffectSettings() const noexcept;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -77,6 +83,7 @@ private:
     PreDropEngine engine;
     RiserSource   riser { engine };
     EffectPlugins effectPlugins;
+    PresetManager presets { *this };
     TrackLink     link { apvts };   // last: leaves the link before the rest goes
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessor)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <functional>
 #include <memory>
 
 #include "PluginProcessor.h"
@@ -11,8 +12,9 @@
     EffectSlotButton: picks what PreDrop uses as its reverb or its delay.
 
     A compact pill under its effect's knob: BUILT-IN, or the loaded plug-in's
-    name (lit), shortened to fit. Clicking opens a menu:
-    the built-in effect, the VST3 plug-ins installed in the standard folders,
+    name (lit), shortened to fit. Clicking opens a menu (or, with onOpen set,
+    calls that instead: the EFFECTS panel's pills open the effect's view, whose
+    own pill has the menu): the built-in effect, the VST3 plug-ins installed in the standard folders,
     a file browser for any other one, and the loaded plug-in's own window. It
     warns (amber, with a tooltip) when a saved plug-in isn't installed here, or
     when the loaded one seems to pass its dry signal through.
@@ -27,9 +29,18 @@ public:
         setLookAndFeel (&pills);
         PreDropLookAndFeel::setCompactPill (*this);
         setPaintingIsUnclipped (true);   // the lit pill's glow reaches past it
-        onClick = [this] { showMenu(); };
+        onClick = [this]
+        {
+            if (onOpen != nullptr)
+                onOpen();
+            else
+                showMenu();
+        };
         refresh();
     }
+
+    /** When set, a click calls this instead of opening the menu. */
+    std::function<void()> onOpen;
 
     ~EffectSlotButton() override { setLookAndFeel (nullptr); }
 
@@ -62,6 +73,9 @@ public:
         else if (leaks)
             setTooltip (name + " is passing its dry signal through. Set its mix to 100% wet: PreDrop sets the "
                         + kind + "'s level itself.");
+        else if (onOpen != nullptr)
+            setTooltip ((name.isNotEmpty() ? name + " is PreDrop's " + kind : "The built-in " + kind)
+                        + ". Click for its settings and to choose another.");
         else if (name.isNotEmpty())
             setTooltip (name + " is PreDrop's " + kind + ". Click to open its window or choose another.");
         else

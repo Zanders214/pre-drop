@@ -94,6 +94,8 @@ void TrackLink::publishMainState() noexcept
     main.depths[(size_t) LinkHub::Effect::hpf].store    (param (ParamID::hpfDepth));
     main.depths[(size_t) LinkHub::Effect::reverb].store (param (ParamID::reverbDepth));
     main.depths[(size_t) LinkHub::Effect::delay].store  (param (ParamID::delayDepth));
+    for (size_t i = 0; i < main.settings.size(); ++i)
+        main.settings[i].store (param (EffectSettings::specs[i].id));
 }
 
 juce::String TrackLink::getTrackName() const

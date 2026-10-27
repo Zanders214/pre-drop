@@ -41,7 +41,9 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
       buildUpCurve (p.getState(), "amount"),
       riserUi (p),
       slotButtons (p, lnf),
-      link (p)
+      effectViews (p),
+      link (p),
+      presetButton (p, lnf)
 {
     // --- Amount knob ---------------------------------------------------------
     amountSlider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -124,11 +126,31 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     link.roleButton.setTooltip ("What this PreDrop does: MAIN on your master, TRACK on a track, RETURN on a return track. Click to choose.");
     link.roleButton.onClick = [this] { showRoleMenu(); };
     addAndMakeVisible (link.roleButton);
+    addAndMakeVisible (presetButton);
 
     addChildComponent (link.matrix);
     addChildComponent (link.panel);
     addChildComponent (slotButtons.reverb);   // shown with the EFFECTS panel
     addChildComponent (slotButtons.delay);
+
+    // --- The REVERB, DELAY and HIGH-PASS views -------------------------------
+    // Their pills under the knobs in EFFECTS open them (the reverb's and
+    // delay's still show their source); each view's BACK returns to EFFECTS.
+    slotButtons.reverb.onOpen = [this] { setReveal (Reveal::reverb); };
+    slotButtons.delay.onOpen  = [this] { setReveal (Reveal::delay); };
+    effectViews.hpfButton.setLookAndFeel (&lnf);
+    PreDropLookAndFeel::setCompactPill (effectViews.hpfButton);
+    effectViews.hpfButton.setComponentID ("hpfSource");
+    effectViews.hpfButton.setPaintingIsUnclipped (true);
+    effectViews.hpfButton.setTooltip ("The high-pass's slope and resonance. Click for its settings.");
+    effectViews.hpfButton.onClick = [this] { setReveal (Reveal::hpf); };
+    addChildComponent (effectViews.hpfButton);   // shown with the EFFECTS panel
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+    {
+        view->onBack = [this] { setReveal (Reveal::effects); };
+        addChildComponent (*view);
+    }
+    updateHpfButton();
 
     // --- Indicators (a TRACK shows what the main is driving it with) ----------
     effectChips.setAmountSource ([this] { return displayedAmount(); });
@@ -171,6 +193,7 @@ PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
     trimSlider.setLookAndFeel (nullptr);
     effectsButton.setLookAndFeel (nullptr);
     riserUi.button.setLookAndFeel (nullptr);
+    effectViews.hpfButton.setLookAndFeel (nullptr);
     link.tracksButton.setLookAndFeel (nullptr);
     link.roleButton.setLookAndFeel (nullptr);
     for (auto& sl : depthSliders)
@@ -190,20 +213,32 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
     slotButtons.reverb.setVisible (main && reveal == Reveal::effects);
     slotButtons.delay.setVisible (main && reveal == Reveal::effects);
     riserUi.button.setVisible (main && reveal == Reveal::effects);
+    effectViews.hpfButton.setVisible (main && reveal == Reveal::effects);
     riserUi.view.setVisible (main && reveal == Reveal::riser);
+    effectViews.reverb.setVisible (main && reveal == Reveal::reverb);
+    effectViews.delay.setVisible (main && reveal == Reveal::delay);
+    effectViews.hpf.setVisible (main && reveal == Reveal::hpf);
     link.matrix.setVisible (main && reveal == Reveal::tracks);
 
-    // The RISER view covers the TRACKS / EFFECTS row (it has its own BACK).
-    effectsButton.setVisible (main && reveal != Reveal::riser);
-    link.tracksButton.setVisible (main && reveal != Reveal::riser);
+    // An effect's view covers the TRACKS / EFFECTS row (it has its own BACK).
+    effectsButton.setVisible (main && ! showsEffectView());
+    link.tracksButton.setVisible (main && ! showsEffectView());
     if (riserUi.view.isVisible())
         riserUi.view.refresh();
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+        if (view->isVisible())
+            view->refresh();
 
     effectsButton.setToggleState (reveal == Reveal::effects, juce::dontSendNotification);
     link.tracksButton.setToggleState (reveal == Reveal::tracks, juce::dontSendNotification);
 
     resized();
     repaint();
+}
+
+bool PreDropAudioProcessorEditor::showsEffectView() const noexcept
+{
+    return reveal == Reveal::riser || reveal == Reveal::reverb || reveal == Reveal::delay || reveal == Reveal::hpf;
 }
 
 bool PreDropAudioProcessorEditor::isTrackMode() const noexcept
@@ -250,6 +285,7 @@ void PreDropAudioProcessorEditor::applyRole()
 
     link.panel.setReturnMode (ret);
     link.panel.setVisible (track);
+    presetButton.setVisible (! track);   // a TRACK's sound is the main's
 
     // A return is always fully wet (its dry is the tracks' own signal).
     mixSlider.setEnabled (! ret);
@@ -327,6 +363,23 @@ void PreDropAudioProcessorEditor::fitRiserLabel()
                                                                     PreDropLookAndFeel::pillScale (true, (float) pill.getHeight())));
 }
 
+void PreDropAudioProcessorEditor::updateHpfButton()
+{
+    // The slope, lit once the high-pass is set away from its gentle default.
+    const auto settings = processorRef.getEffectSettings();
+    const auto label    = juce::String (settings.hpfSteep() ? "24 dB" : "12 dB")
+                        + (settings[EffectSettings::hpfResonance] > 0.005f ? " + RES" : "");
+    if (label == effectViews.hpfLabel)
+        return;
+
+    effectViews.hpfLabel = label;
+    auto& pill = effectViews.hpfButton;
+    pill.setButtonText (PreDropLookAndFeel::fitPillLabel (label, true, (float) pill.getWidth(),
+                                                          PreDropLookAndFeel::pillScale (true, (float) pill.getHeight())));
+    pill.setToggleState (label != "12 dB", juce::dontSendNotification);
+    repaint();   // the lit pill's glow
+}
+
 bool PreDropAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
     return ! isTrackMode() && files.size() == 1 && processorRef.getRiser().isSupportedFile (juce::File (files[0]));
@@ -377,6 +430,13 @@ void PreDropAudioProcessorEditor::timerCallback()
         applyRole();
     if (riserUi.view.isVisible())
         riserUi.view.refresh();
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+        if (view->isVisible())
+            view->refresh();
+    if (effectViews.hpfButton.isVisible())
+        updateHpfButton();
+    if (presetButton.isVisible())
+        presetButton.refresh();
     if (link.matrix.isVisible())
         link.matrix.refresh();
     if (link.panel.isVisible())
@@ -558,6 +618,13 @@ void PreDropAudioProcessorEditor::resized()
     layout.header = area.removeFromTop (px (20.0f));
     link.roleButton.setBounds (layout.header.withTrimmedLeft (layout.header.getWidth() - px (78.0f))
                                             .withSizeKeepingCentre (px (78.0f), px (20.0f)));
+    {
+        // The preset pill fills the space between the wordmark and the role pill.
+        const auto wordmark = (int) std::ceil (textWidth (Fonts::sans (16.0f * s, true, -0.01f), "ZandersPreDrop"));
+        auto between = layout.header.withTrimmedLeft (wordmark + px (10.0f))
+                                    .withRight (link.roleButton.getX() - px (8.0f));
+        presetButton.setBounds (between.withSizeKeepingCentre (between.getWidth(), px (16.0f)));
+    }
 
     area.removeFromTop (px (14.0f));                       // gap before knob
     auto knob = area.removeFromTop (px (172.0f));
@@ -587,6 +654,11 @@ void PreDropAudioProcessorEditor::resized()
     link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
     riserUi.view.setUiScale (s);
     riserUi.view.setBounds (layout.reveal.withTop (buttonRowTop));
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+    {
+        view->setUiScale (s);
+        view->setBounds (layout.reveal.withTop (buttonRowTop));
+    }
 
     // Lay out the four depth dials across the reveal slot (used when open): each
     // column is an arc on top, its name + value beneath, and under those the
@@ -604,8 +676,9 @@ void PreDropAudioProcessorEditor::resized()
         // Vertically centre the column contents within the slot.
         knobs.removeFromTop (juce::jmax (0, (knobs.getHeight() - (dialSize + textBlock + pillGap + pillH)) / 2));
 
-        // Source pills, by column (depthParamIds order: reverb, delay, riser).
-        const std::array<juce::Component*, numDepths> sources { &slotButtons.reverb, &slotButtons.delay, &riserUi.button, nullptr };
+        // Source pills, by column (depthParamIds order: reverb, delay, riser, high-pass).
+        const std::array<juce::Component*, numDepths> sources { &slotButtons.reverb, &slotButtons.delay, &riserUi.button,
+                                                                &effectViews.hpfButton };
 
         for (size_t i = 0; i < depthSliders.size(); ++i)
         {
@@ -623,6 +696,8 @@ void PreDropAudioProcessorEditor::resized()
                 sources[i]->setBounds (col.removeFromTop (pillH).withSizeKeepingCentre (colW + kGap - px (4.0f), pillH));
         }
         fitRiserLabel();
+        effectViews.hpfLabel = "?";   // refits the high-pass's label
+        updateHpfButton();
     }
 
     area.removeFromTop (px (20.0f));                       // gap before slider section

@@ -66,7 +66,8 @@ set(PREDROP_APP_SOURCES
     Source/PreDropLookAndFeel.cpp
     Source/EffectPlugins.cpp
     Source/RiserSource.cpp
-    Source/TrackLink.cpp)
+    Source/TrackLink.cpp
+    Source/PresetManager.cpp)
 
 target_sources(PreDrop PRIVATE ${PREDROP_APP_SOURCES})
 

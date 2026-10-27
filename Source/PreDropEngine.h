@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 
+#include "EffectSettings.h"
 #include "RiserSample.h"
 #include "RtHandoff.h"
 #include "RtSafety.h"
@@ -64,7 +65,7 @@ public:
         float reverbWet     = 0.0f;    // juce::dsp::Reverb wetLevel (wet-only send)
         float reverbSize    = 0.3f;    // 0..1 room size
         float delayWet      = 0.0f;    // echo gain
-        float delayFeedback = 0.0f;    // 0..maxDelayFeedback, well below 1 for stability
+        float delayFeedback = 0.0f;    // 0..FEEDBACK (at most 0.9), below 1 for stability
         float riserLevel    = 0.0f;    // riser RMS as a fraction of the signal's RMS
         float reverbLevel   = 0.0f;    // reverb / delay wet level as a fraction of the
         float delayLevel    = 0.0f;    // signal (what an external effect is scaled to)
@@ -99,8 +100,13 @@ public:
         Amount and the default depth of 0.5 (-6 dB). */
     static constexpr float nominalWetRatio = 0.5f;
 
-    /** Delay feedback at full Amount; see mapMacro for why it stops here. */
+    /** Delay feedback at full Amount by default (FEEDBACK); see mapMacro for
+        why it stops here. */
     static constexpr float maxDelayFeedback = 0.6f;
+
+    /** Room size at the start of the reverb's sweep, as a share of SIZE (the
+        default 95% grows from 0.30). */
+    static constexpr float reverbStartShare = 0.30f / 0.95f;
 
     /** Gain an effect's depth applies to its nominal level: 0 -> off,
         0.5 -> 1x (balanced), 1 -> 2x. */
@@ -131,12 +137,15 @@ public:
     /** Pure macro -> targets mapping with every effect at its default depth. */
     static Targets mapMacro (float amount) noexcept { return mapMacro (amount, Depths {}); }
 
+    /** ... and with the effects' default settings. */
+    static Targets mapMacro (float amount, Depths depth) noexcept { return mapMacro (amount, depth, EffectSettings {}); }
+
     /** Pure macro -> targets mapping. No state, so it is trivially unit-testable.
 
-        A default argument can't be used here: Depths is a nested type and its
+        Default arguments can't be used here: Depths is a nested type and its
         default member initialisers aren't available in this member's default
-        argument, so the no-depth overload above delegates from its body. */
-    static Targets mapMacro (float amount, Depths depth) noexcept
+        argument, so the shorter overloads above delegate from their bodies. */
+    static Targets mapMacro (float amount, Depths depth, const EffectSettings& settings) noexcept
     {
         const float p = juce::jlimit (0.0f, 1.0f, amount);
         Targets t;
@@ -144,9 +153,11 @@ public:
         // 1. High-pass: sweeps up evenly in pitch (octaves) as Amount rises.
         t.hpfCutoffHz = minHpfCutoffHz * std::exp2 (hpfTopOctaves (depth.hpf) * p);
 
-        // 2. Reverb: the room grows with Amount; the wet send is compensated for
-        //    the louder tail so its level rises in step with the others.
-        t.reverbSize  = 0.30f + 0.65f * p;
+        // 2. Reverb: the room grows with Amount up to SIZE; the wet send is
+        //    compensated for the louder tail so its level rises in step with
+        //    the others.
+        const float size = settings[EffectSettings::reverbSize];
+        t.reverbSize  = size * (reverbStartShare + (1.0f - reverbStartShare) * p);
         t.reverbLevel = nominalWetRatio * depthGain (depth.reverb) * p;
         t.reverbWet   = t.reverbLevel / reverbWetGain (t.reverbSize);
 
@@ -156,15 +167,17 @@ public:
         //    That energy sum is exact for material whose echoes don't line up.
         //    Echoes that do (a tone or loop whose period divides the delay time)
         //    add in phase to 1 / (1 - fb), sqrt((1 + fb) / (1 - fb)) times more.
-        //    Capping feedback at 0.6 bounds that to 2x (+6 dB, ~5 s tail) rather
-        //    than 3.5x (+11 dB) at 0.85.
-        t.delayFeedback = maxDelayFeedback * p;
+        //    The default FEEDBACK of 0.6 bounds that to 2x (+6 dB, ~5 s tail)
+        //    rather than 3.5x (+11 dB) at 0.85.
+        t.delayFeedback = settings[EffectSettings::delayFeedback] * p;
         t.delayLevel    = nominalWetRatio * depthGain (depth.delay) * p;
         t.delayWet      = t.delayLevel * std::sqrt (1.0f - t.delayFeedback * t.delayFeedback);
 
-        // 4. Riser: level relative to the signal, sweeping 200 Hz -> 8 kHz.
+        // 4. Riser: level relative to the signal, sweeping evenly in pitch from
+        //    START to END (200 Hz -> 8 kHz by default).
+        const float start = settings[EffectSettings::riserStart];
         t.riserLevel    = nominalWetRatio * depthGain (depth.riser) * p;
-        t.riserCutoffHz = 200.0f * std::pow (8000.0f / 200.0f, p);
+        t.riserCutoffHz = start * std::pow (settings[EffectSettings::riserEnd] / start, p);
 
         return t;
     }
@@ -179,22 +192,28 @@ public:
         spec.maximumBlockSize = (juce::uint32) juce::jmax (1, maximumBlockSize);
         spec.numChannels      = (juce::uint32) numCh;
 
-        hpf.prepare (spec);
-        hpf.setType (juce::dsp::StateVariableTPTFilterType::highpass);
+        for (auto* stage : { &hpf, &hpf2 })
+        {
+            stage->prepare (spec);
+            stage->setType (juce::dsp::StateVariableTPTFilterType::highpass);
+        }
 
         riser.filter.prepare (spec);
         riser.filter.setType (juce::dsp::StateVariableTPTFilterType::bandpass);
-        riser.filter.setResonance (1.5f);
+        applied = {};
+        applySettings();
 
         // Set the reverb's parameters before preparing it: prepare() snaps its
         // internal smoothers, so the wet-only send starts with no dry leaking in.
-        const Targets t = mapMacro (amount, depths);
+        const Targets t = mapMacro (amount, depths, settings);
         applyReverbParameters (t.reverbSize, t.reverbWet);
         reverb.prepare (spec);
 
-        delayLine.setMaximumDelayInSamples (maxDelaySamples);
+        preDelay.line.setMaximumDelayInSamples ((int) std::ceil (maxPreDelaySeconds * sampleRate) + 2);
+        preDelay.line.prepare (spec);
+
+        delayLine.setMaximumDelayInSamples ((int) std::ceil (EffectSettings::maxDelaySeconds * sampleRate) + 2);
         delayLine.prepare (spec);
-        delayLine.setDelay ((float) (delayTimeSeconds * sampleRate));
 
         // Not running concurrently with process(), so a riser sample handed over
         // since the last block (typically one rebuilt for this sample rate) can
@@ -218,6 +237,8 @@ public:
         sm.hpfBlend   .reset (sampleRate, 0.03);   // in / out of the high-pass
         sm.extReverb  .reset (sampleRate, ramp);
         sm.extDelay   .reset (sampleRate, ramp);
+        sm.delayTime  .reset (sampleRate, 0.1);    // a short glide, not a jump, to a new time
+        sm.preDelay   .reset (sampleRate, 0.1);
 
         // Snap smoothers to the current targets so the first block does not sweep.
         sm.hpfCutoff  .setCurrentAndTargetValue (t.hpfCutoffHz);
@@ -230,6 +251,10 @@ public:
         sm.mix        .setCurrentAndTargetValue (mix);
         sm.trim       .setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
         sm.hpfBlend   .setCurrentAndTargetValue (t.hpfCutoffHz > minHpfCutoffHz ? 1.0f : 0.0f);
+        sm.delayTime  .setCurrentAndTargetValue (delayTimeSamples());
+        sm.preDelay   .setCurrentAndTargetValue (preDelaySamples());
+        delayLine.setDelay (sm.delayTime.getCurrentValue());
+        preDelay.line.setDelay (sm.preDelay.getCurrentValue());
 
         reset();
     }
@@ -237,9 +262,12 @@ public:
     void reset()
     {
         hpf.reset();
+        hpf2.reset();
         riser.filter.reset();
         reverb.reset();
+        preDelay.line.reset();
         delayLine.reset();
+        tone = {};
 
         // Re-prime the coefficient caches so the next block re-applies the
         // cutoffs, and let the riser's level follower start from silence.
@@ -285,6 +313,10 @@ public:
     void setMix          (float newMix)    noexcept { mix          = newMix; }
     void setOutputTrimDb (float db)        noexcept { outputTrimDb = db; }
 
+    /** How the built-in effects sound (see EffectSettings). Audio thread,
+        before process(); a plain copy. */
+    void setEffectSettings (const EffectSettings& newSettings) noexcept { settings = newSettings; }
+
     void setReverbDepth (float d) noexcept { depths.reverb = d; }
     void setDelayDepth  (float d) noexcept { depths.delay  = d; }
     void setRiserDepth  (float d) noexcept { depths.riser  = d; }
@@ -313,6 +345,7 @@ public:
         for (int ch = 0; ch < channels; ++ch)
             buffers.dry.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
+        applySettings();
         setTargets();
         const Engaged on = engageEffects();
         const Block block { buffer.getArrayOfWritePointers(), channels, numSamples };
@@ -378,7 +411,7 @@ private:
     // while the external one ramps in at the same level.
     void setTargets() noexcept
     {
-        const Targets t = mapMacro (amount, depths);
+        const Targets t = mapMacro (amount, depths, settings);
         sm.hpfCutoff  .setTargetValue (t.hpfCutoffHz);
         sm.reverbWet  .setTargetValue (external.reverb != nullptr ? 0.0f : t.reverbWet);
         sm.reverbSize .setTargetValue (t.reverbSize);
@@ -390,6 +423,71 @@ private:
         sm.riserCutoff.setTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sr));   // clear of Nyquist
         sm.mix        .setTargetValue (mix);
         sm.trim       .setTargetValue (juce::Decibels::decibelsToGain (outputTrimDb));
+        sm.delayTime  .setTargetValue (delayTimeSamples());
+        sm.preDelay   .setTargetValue (preDelaySamples());
+    }
+
+    // The settings that aren't swept by Amount: pushed to the filters only
+    // when they change (each push recomputes coefficients).
+    void applySettings() noexcept
+    {
+        const bool  steep = settings.hpfSteep();
+        const float q     = settings.hpfQ();
+        if (steep != applied.hpfSteep || ! juce::exactlyEqual (q, applied.hpfQ))
+        {
+            // 24 dB: two stages with a Butterworth pair of Qs, both scaled by
+            // the resonance (12 dB: the one stage at its Q).
+            const float scale = q * juce::MathConstants<float>::sqrt2;   // 1 with no resonance
+            hpf.setResonance  (steep ? 0.5411961f * scale : q);
+            hpf2.setResonance (steep ? 1.3065630f * scale : q);
+            applied.hpfSteep = steep;
+            applied.hpfQ     = q;
+        }
+
+        if (const float rq = settings.riserQ(); ! juce::exactlyEqual (rq, applied.riserQ))
+        {
+            riser.filter.setResonance (rq);
+            riser.qGain      = riserQGain (rq);
+            riser.lastCutoff = -1.0f;                   // recompute the unit gain
+            applied.riserQ   = rq;
+        }
+
+        // A one-pole low-pass in the delay's repeats (none when TONE is open),
+        // and the gain that keeps the darker repeats at the delay's level.
+        const float toneHz = settings[EffectSettings::delayTone];
+        const bool  open   = toneHz >= EffectSettings::toneOpenHz - 1.0f;
+        tone.coeff = open ? 1.0f : 1.0f - std::exp (-juce::MathConstants<float>::twoPi * toneHz / (float) sr);
+        tone.gain  = open ? 1.0f : toneGain (toneHz, sm.delayFb.getTargetValue());
+    }
+
+    /** Gain that keeps the delay at its level through TONE's low-pass, which
+        takes about half a dB per octave below 20 kHz out of pink noise, a
+        little more as the repeats pile up (measured at 48 kHz, to within
+        0.4 dB from 500 Hz to 16 kHz). */
+    static float toneGain (float toneHz, float feedback) noexcept
+    {
+        const float octaves = std::log2 (EffectSettings::toneOpenHz / juce::jmax (1.0f, toneHz));
+        return juce::Decibels::decibelsToGain ((0.1f + 0.5f * juce::jmax (0.0f, octaves)) * (1.0f + 0.25f * feedback));
+    }
+
+    /** Gain that keeps the noise riser at its level at band-pass Q `q`: its
+        unit gain is measured at Q 1.5, and band-passed noise grows roughly as
+        sqrt (Q), a little less as the band narrows (fitted on the sweep's top,
+        to within 0.1 dB from Q 0.5 to 8). */
+    static float riserQGain (float q) noexcept
+    {
+        const float x = std::log2 (q / 1.5f);
+        return std::sqrt (1.5f / q) * juce::Decibels::decibelsToGain (-(0.72f * x - 0.15f * x * x));
+    }
+
+    float delayTimeSamples() const noexcept
+    {
+        return (float) juce::jlimit (1.0, EffectSettings::maxDelaySeconds * sr, settings.delaySeconds (transport.bpm) * sr);
+    }
+
+    float preDelaySamples() const noexcept
+    {
+        return (float) juce::jlimit (0.0, maxPreDelaySeconds * sr, settings[EffectSettings::reverbPreDelay] / 1000.0 * sr);
     }
 
     // An effect whose control has settled at "off" is skipped outright (and
@@ -427,6 +525,7 @@ private:
             if (const float fc = sm.hpfCutoff.getNextValue(); ! juce::exactlyEqual (fc, lastHpfCutoff))
             {
                 hpf.setCutoffFrequency (fc);
+                hpf2.setCutoffFrequency (fc);
                 lastHpfCutoff = fc;
             }
 
@@ -434,7 +533,10 @@ private:
             for (int ch = 0; ch < b.channels; ++ch)
             {
                 const float dry = b.data[ch][n];
-                b.data[ch][n] = dry + blend * (hpf.processSample (ch, dry) - dry);
+                float filtered  = hpf.processSample (ch, dry);
+                if (applied.hpfSteep)
+                    filtered = hpf2.processSample (ch, filtered);
+                b.data[ch][n] = dry + blend * (filtered - dry);
             }
         }
     }
@@ -482,6 +584,19 @@ private:
         for (int ch = 0; ch < reverbChannels; ++ch)
             buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
+        // PRE-DELAY: the send reaches the room that much later.
+        for (int n = 0; n < numSamples; ++n)
+        {
+            if (sm.preDelay.isSmoothing())
+                preDelay.line.setDelay (sm.preDelay.getNextValue());
+            for (int ch = 0; ch < reverbChannels; ++ch)
+            {
+                auto* send = buffers.reverb.getWritePointer (ch);
+                preDelay.line.pushSample (ch, send[n]);
+                send[n] = preDelay.line.popSample (ch);
+            }
+        }
+
         juce::dsp::AudioBlock<float> block (buffers.reverb);
         auto subBlock = block.getSubsetChannelBlock (0, (size_t) reverbChannels)
                              .getSubBlock (0, (size_t) numSamples);
@@ -496,24 +611,54 @@ private:
         {
             sm.delayWet.skip (b.numSamples);
             sm.delayFb.skip (b.numSamples);
+            delayLine.setDelay (sm.delayTime.skip (b.numSamples));
             if (wetOnly)
                 for (int ch = 0; ch < b.channels; ++ch)
                     juce::FloatVectorOperations::clear (b.data[ch], b.numSamples);
             return;
         }
 
+        // PING-PONG (stereo only): both sides go in on the left and the
+        // repeats cross over. Each side then gets every other echo, half the
+        // power, so they're raised 3 dB to sit at the same level.
+        const bool pingPong = settings.isOn (EffectSettings::delayPingPong) && b.channels >= 2;
+        const float sideGain = pingPong ? juce::MathConstants<float>::sqrt2 : 1.0f;
+
         for (int n = 0; n < b.numSamples; ++n)
         {
-            const float wet = sm.delayWet.getNextValue();
+            const float wet = sm.delayWet.getNextValue() * sideGain * tone.gain;
             const float fb  = sm.delayFb.getNextValue();
+            if (sm.delayTime.isSmoothing())
+                delayLine.setDelay (sm.delayTime.getNextValue());
 
+            // The repeats, through TONE's low-pass.
+            std::array<float, 2> delayed {};
             for (int ch = 0; ch < b.channels; ++ch)
             {
-                const float in      = b.data[ch][n];
-                const float delayed = delayLine.popSample (ch);
-                delayLine.pushSample (ch, in + delayed * fb);
-                b.data[ch][n] = (wetOnly ? 0.0f : in) + delayed * wet;
+                float& state = tone.state[(size_t) juce::jmin (ch, 1)];
+                state += tone.coeff * (delayLine.popSample (ch) - state);
+                if (ch < 2)
+                    delayed[(size_t) ch] = state;
+                else   // beyond stereo: as usual
+                {
+                    delayLine.pushSample (ch, b.data[ch][n] + state * fb);
+                    b.data[ch][n] = (wetOnly ? 0.0f : b.data[ch][n]) + state * wet;
+                }
             }
+
+            if (pingPong)
+            {
+                delayLine.pushSample (0, 0.5f * (b.data[0][n] + b.data[1][n]) + delayed[1] * fb);
+                delayLine.pushSample (1, delayed[0] * fb);
+            }
+            else
+            {
+                for (int ch = 0; ch < juce::jmin (b.channels, 2); ++ch)
+                    delayLine.pushSample (ch, b.data[ch][n] + delayed[(size_t) ch] * fb);
+            }
+
+            for (int ch = 0; ch < juce::jmin (b.channels, 2); ++ch)
+                b.data[ch][n] = (wetOnly ? 0.0f : b.data[ch][n]) + delayed[(size_t) ch] * wet;
         }
     }
 
@@ -659,7 +804,7 @@ private:
         if (! juce::exactlyEqual (cutoff, riser.lastCutoff))
         {
             riser.filter.setCutoffFrequency (cutoff);
-            riser.unitGain   = unitRmsGain (cutoff);
+            riser.unitGain   = unitRmsGain (cutoff) * riser.qGain;
             riser.lastCutoff = cutoff;
         }
 
@@ -737,14 +882,18 @@ private:
         params.roomSize   = roomSize;
         params.wetLevel   = wetLevel;
         params.dryLevel   = 0.0f;   // wet only: the signal is summed back in process()
-        params.damping    = 0.4f;
-        params.width      = 1.0f;
+        params.damping    = settings[EffectSettings::reverbDamping];
+        params.width      = settings[EffectSettings::reverbWidth];
+
+        // Narrower, the reverb's two sides (which don't line up) are mixed
+        // into each other and lose up to 3 dB: put it back.
+        const float w = params.width;
+        params.wetLevel *= std::sqrt (2.0f / (1.0f + w * w));
         params.freezeMode = 0.0f;
         reverb.setParameters (params);
     }
 
-    static constexpr int maxDelaySamples = 192000; // up to ~2 s even at 96 kHz
-    static constexpr double delayTimeSeconds = 0.375; // 1/8 note at ~80 BPM, fixed for v1
+    static constexpr double maxPreDelaySeconds = 0.25;
     static constexpr double riserFollowSeconds = 0.4; // riser level-follower time constant
 
     // Gain that brings uniform [-1, 1] noise through the riser's Q = 1.5
@@ -768,10 +917,38 @@ private:
     Depths depths;
     bool  wetOnly = false;
 
+    EffectSettings settings;
+
     juce::dsp::StateVariableTPTFilter<float> hpf;
+    juce::dsp::StateVariableTPTFilter<float> hpf2;   // the second stage of the 24 dB slope
     juce::dsp::Reverb                        reverb;
-    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine { maxDelaySamples };
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine;
     juce::Random                             random;
+
+    // The reverb's pre-delay line.
+    struct PreDelay
+    {
+        juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> line;
+    };
+    PreDelay preDelay;
+
+    // The delay's TONE low-pass (one pole per side, applied to the repeats).
+    struct Tone
+    {
+        float coeff = 1.0f;
+        float gain  = 1.0f;
+        std::array<float, 2> state {};
+    };
+    Tone tone;
+
+    // The settings last pushed to the filters (pushing recomputes coefficients).
+    struct Applied
+    {
+        bool  hpfSteep = false;
+        float hpfQ     = -1.0f;
+        float riserQ   = -1.0f;
+    };
+    Applied applied;
 
     // The input kept for the dry/wet mix, the built-in reverb's send, and the
     // external effects' sends (two channels each: reverb, then delay).
@@ -813,6 +990,7 @@ private:
         juce::dsp::StateVariableTPTFilter<float> filter;
         float lastCutoff = -1.0f;
         float unitGain   = 1.0f;
+        float qGain      = 1.0f;   // the unit gain's correction for the band-pass's Q
         float meanSquare = 0.0f;
         float signalRms  = 0.0f;
         double samplePos = 0.0;    // in the sample's loop, fractional when playing at another tempo
@@ -842,6 +1020,8 @@ private:
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> hpfBlend;   // dry 0 .. filtered 1
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> extReverb;  // external effects' levels
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> extDelay;
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> delayTime;  // in samples
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> preDelay;   // in samples
     };
     Smoothers sm;
 

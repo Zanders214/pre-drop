@@ -6,6 +6,8 @@
 #include <atomic>
 #include <vector>
 
+#include "EffectSettings.h"
+
 /**
     LinkHub
 
@@ -53,11 +55,28 @@ public:
     };
 
     /** What the main publishes for its tracks; written by the main, read by any
-        thread. Depths are indexed by Effect. */
+        thread. Depths are indexed by Effect, settings by EffectSettings::Id. */
     struct MainState
     {
+        MainState() noexcept
+        {
+            const EffectSettings defaults;
+            for (size_t i = 0; i < settings.size(); ++i)
+                settings[i].store (defaults.values[i]);
+        }
+
         std::atomic<float> amount { 0.0f };
         std::array<std::atomic<float>, numEffects> depths { 0.5f, 0.5f, 0.5f };
+        std::array<std::atomic<float>, EffectSettings::count> settings;
+
+        /** The main's effect settings, as its tracks use them. */
+        EffectSettings effectSettings() const noexcept
+        {
+            EffectSettings s;
+            for (size_t i = 0; i < settings.size(); ++i)
+                s.values[i] = settings[i].load();
+            return s;
+        }
     };
 
     // --- The main slot ------------------------------------------------------
