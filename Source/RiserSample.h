@@ -16,6 +16,11 @@
     same level balance as the built-in noise riser (PreDropEngine scales both by
     the riser level and the signal's loudness).
 
+    A sample that follows the project's tempo carries the tempo it plays at
+    when read at normal speed; the engine reads it faster or slower by the
+    ratio of the project's tempo to that. Its loop is then a whole number of
+    bars long, starting exactly on the first one, so it stays on the grid.
+
     Immutable once created. An empty one (no samples) means "use the built-in
     noise riser"; PreDropEngine::setRiserSample takes either.
 */
@@ -23,6 +28,8 @@ struct RiserSample
 {
     juce::AudioBuffer<float> audio;     // at the engine's sample rate, 1 or 2 channels
     float unitGain = 1.0f;              // 1 / RMS of `audio`
+    double tempo   = 0.0;               // quarter notes / min at normal speed; 0: fixed speed
+    int sourceId   = 0;                 // the same for every rendering of one loaded file
     juce::String name;
 
     int length() const noexcept { return audio.getNumSamples(); }
@@ -32,19 +39,29 @@ struct RiserSample
 
     /** Builds a riser from decoded audio. Returns nullptr when there is nothing
         to play (empty, or silent so it cannot be normalised). Allocates: call
-        on the message thread or from prepareToPlay, never on the audio thread. */
+        on the message thread or from prepareToPlay, never on the audio thread.
+
+        With `loopSeconds`, the loop is exactly that long (trimmed, or padded
+        with silence) and keeps its start where it is, for a bar-aligned loop;
+        `tempo` is what that plays at (see above). Without, the whole sample
+        loops, its head crossfaded into its tail. */
     static std::unique_ptr<RiserSample> create (const juce::AudioBuffer<float>& source, double sourceRate,
-                                                double targetRate, const juce::String& name)
+                                                double targetRate, const juce::String& name,
+                                                double tempo = 0.0, double loopSeconds = 0.0)
     {
         const int channels = juce::jmin (2, source.getNumChannels());
         if (channels <= 0 || source.getNumSamples() <= 0 || sourceRate <= 0.0 || targetRate <= 0.0)
             return nullptr;
 
         auto result = std::make_unique<RiserSample>();
-        result->name = name;
+        result->name  = name;
+        result->tempo = tempo;
 
         const auto resampled = resample (source, channels, sourceRate / targetRate);
-        result->audio = bakeLoopCrossfade (resampled, (int) (loopCrossfadeSeconds * targetRate));
+        result->audio = loopSeconds > 0.0
+                          ? fitLoop (resampled, juce::jmax (1, (int) std::lround (loopSeconds * targetRate)),
+                                     (int) (loopEdgeFadeSeconds * targetRate))
+                          : bakeLoopCrossfade (resampled, (int) (loopCrossfadeSeconds * targetRate));
 
         double sum = 0.0;
         for (int ch = 0; ch < channels; ++ch)
@@ -61,6 +78,26 @@ struct RiserSample
 
 private:
     static constexpr double loopCrossfadeSeconds = 0.02;
+    static constexpr double loopEdgeFadeSeconds  = 0.005;
+
+    // Trims or pads (with silence) to exactly `length` samples, fading the
+    // end out (and the first few samples in) so the wrap doesn't click.
+    static juce::AudioBuffer<float> fitLoop (const juce::AudioBuffer<float>& in, int length, int fade)
+    {
+        juce::AudioBuffer<float> out (in.getNumChannels(), length);
+        out.clear();
+        const int kept = juce::jmin (length, in.getNumSamples());
+        for (int ch = 0; ch < in.getNumChannels(); ++ch)
+            out.copyFrom (ch, 0, in, ch, 0, kept);
+
+        fade = juce::jmin (fade, kept / 4);
+        if (fade >= 2)
+        {
+            out.applyGainRamp (kept - fade, fade, 1.0f, 0.0f);
+            out.applyGainRamp (0, fade / 5 + 1, 0.0f, 1.0f);
+        }
+        return out;
+    }
 
     // Windowed-sinc resampling of the first `channels` channels. `ratio` is
     // source rate / target rate; 1 copies straight through.

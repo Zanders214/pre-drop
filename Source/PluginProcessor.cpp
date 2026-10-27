@@ -158,6 +158,14 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         engine.setRiserDepth  (param (ParamID::riserDepth));
     }
 
+    // Where the host's transport is: a riser sample that follows the project
+    // plays at its tempo and starts on its bar lines.
+    const auto transport = readTransport();
+    engine.setTransport (transport);
+    riser.setHostTempo (transport.bpm);
+    if (isNonRealtime())
+        riser.renderIfStale();   // a bounce can't wait for a background re-render
+
     // A loaded reverb / delay plug-in takes over from the built-in one.
     engine.setExternalEffects (effectPlugins.acquire (EffectSlot::reverb, getPlayHead()),
                                effectPlugins.acquire (EffectSlot::delay,  getPlayHead()));
@@ -218,11 +226,33 @@ void PreDropAudioProcessor::updateTrackProperties (const TrackProperties& proper
     link.setHostTrackName (properties.name);
 }
 
+PreDropEngine::Transport PreDropAudioProcessor::readTransport() const
+{
+    PreDropEngine::Transport transport;
+    const auto* playHead = getPlayHead();
+    const auto position = playHead != nullptr ? playHead->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
+    if (! position.hasValue())
+        return transport;
+
+    transport.playing = position->getIsPlaying();
+    transport.bpm     = position->getBpm().orFallback (0.0);
+    transport.ppq     = position->getPpqPosition().orFallback (0.0);
+
+    // Bars in the host's meter, counted from its last bar line (or from the
+    // start, if it doesn't say where that was).
+    if (const auto meter = position->getTimeSignature(); meter.hasValue() && meter->numerator > 0 && meter->denominator > 0)
+        transport.barLength = meter->numerator * 4.0 / meter->denominator;
+    transport.barStart = position->getPpqPositionOfLastBarStart()
+                             .orFallback (std::floor (transport.ppq / transport.barLength) * transport.barLength);
+    return transport;
+}
+
 void PreDropAudioProcessor::timerCallback()
 {
     engine.collectRetiredRiserSamples();
     effectPlugins.collect();
     link.update();
+    riser.update();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

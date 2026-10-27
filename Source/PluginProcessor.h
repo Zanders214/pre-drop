@@ -65,9 +65,13 @@ public:
     const TrackLink& getLink() const noexcept    { return link; }
     EffectPlugins&   getEffectPlugins() noexcept { return effectPlugins; }
 
+    /** Where the riser sample is in its loop (0..1), or -1 while it isn't playing. */
+    float getRiserPlayhead() const noexcept { return engine.getRiserPlayhead(); }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void timerCallback() override;
+    PreDropEngine::Transport readTransport() const;
 
     juce::AudioProcessorValueTreeState apvts;
     PreDropEngine engine;

@@ -9,6 +9,7 @@
 #include "BuildUpCurve.h"
 #include "EffectSlotButton.h"
 #include "TrackMatrix.h"
+#include "RiserView.h"
 #include "TrackPanel.h"
 
 /**
@@ -44,17 +45,15 @@ public:
 
 private:
     void timerCallback() override;
-    void showRiserMenu();
-    void chooseRiserFile();
-    void loadRiser (const juce::File& file);
     void updateRiserButton();
     void fitRiserLabel();
     void paintHeader (juce::Graphics&, float scale) const;
     void paintSliderLabels (juce::Graphics&, float scale) const;
     void paintDepthPanel (juce::Graphics&, float scale) const;
 
-    // What fills the slot under the chips while this instance is MAIN.
-    enum class Reveal { curve, effects, tracks };
+    // What fills the slot under the chips while this instance is MAIN. The
+    // RISER view takes the button row above it too.
+    enum class Reveal { curve, effects, tracks, riser };
     void setReveal (Reveal newReveal);
 
     // Linking. "Track mode" covers TRACK and RETURN: both follow the main.
@@ -118,15 +117,16 @@ private:
     };
     LastValues last;
 
-    // The riser's source pill under its knob in EFFECTS: shows the sample in
-    // use, opens the load / back-to-noise menu, and owns the file chooser
-    // while it is open.
+    // The riser's source pill under its knob in EFFECTS shows the sample in
+    // use and opens the RISER view: the sample, its timing and its source.
     struct RiserControl
     {
-        juce::TextButton                   button;
-        std::unique_ptr<juce::FileChooser> chooser;
-        juce::String                       shownName { "?" };   // forces the first update
-        bool                               dragActive = false;
+        explicit RiserControl (PreDropAudioProcessor& p) : view (p) {}
+
+        juce::TextButton button;
+        RiserView        view;
+        juce::String     shownName { "?" };   // forces the first update
+        bool             dragActive = false;
     };
     RiserControl riserUi;
 

@@ -84,6 +84,17 @@ public:
         float riser  = 0.5f;
     };
 
+    /** Where the host's transport is at the start of a block, for a riser
+        sample that follows the project. Positions are in quarter notes. */
+    struct Transport
+    {
+        bool   playing    = false;
+        double bpm        = 0.0;    // 0: the host gives no tempo
+        double ppq        = 0.0;    // position at the block's first sample
+        double barStart   = 0.0;    // position of the bar that contains it
+        double barLength  = 4.0;    // quarter notes per bar in the host's meter
+    };
+
     /** Wet level of reverb, delay and riser relative to the signal, at full
         Amount and the default depth of 0.5 (-6 dB). */
     static constexpr float nominalWetRatio = 0.5f;
@@ -237,7 +248,10 @@ public:
         riser.lastCutoff   = -1.0f;
         riser.meanSquare   = 0.0f;
         riser.signalRms    = 0.0f;
-        riser.samplePos    = 0;
+        riser.samplePos    = 0.0;
+        riser.armed        = true;
+        riser.wait         = 0;
+        riserPlayhead      = -1.0f;
     }
 
     /** Hands the engine a riser sample built for its current sample rate, or
@@ -249,6 +263,14 @@ public:
 
     /** Frees riser samples the audio thread has swapped out. Message thread. */
     void collectRetiredRiserSamples() { riserSample.collect(); }
+
+    /** The host's transport for this block. Audio thread, before process(). */
+    void setTransport (const Transport& now) noexcept { transport = now; }
+
+    /** Where a riser sample is in its loop (0..1), or -1 while it isn't
+        playing (no sample, the riser is down, or it waits for a bar line).
+        Any thread. */
+    float getRiserPlayhead() const noexcept { return riserPlayhead.load(); }
 
     /** The external reverb and delay for this block (nullptr: the built-in
         one). Audio thread, before process(). Switching crossfades over 40 ms,
@@ -285,10 +307,7 @@ public:
         if (numSamples <= 0 || channels <= 0)
             return;
 
-        // Adopt a newly handed-over riser sample (the replaced one goes back to
-        // the message thread to free), and restart playback for it.
-        if (bool adopted = false; riserSample.acquire (&adopted) != nullptr && adopted)
-            riser.samplePos = 0;
+        adoptRiserSample();
 
         // Keep a clean copy of the input for the final dry/wet mix.
         for (int ch = 0; ch < channels; ++ch)
@@ -332,6 +351,7 @@ public:
         {
             sm.riserLevel.skip (numSamples);
             sm.riserCutoff.skip (numSamples);
+            riserPlayhead = -1.0f;
         }
 
         // --- 5. Global dry/wet mix + output trim (per sample) -------------------
@@ -393,7 +413,7 @@ private:
             runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); }),
             runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); }),
             runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); }),
-            runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0; })
+            runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0.0; riser.armed = true; })
         };
     }
 
@@ -505,6 +525,10 @@ private:
         const RiserSample* sample = riserSample.current();
         const bool useSample = sample != nullptr && sample->length() > 0;
 
+        // A sample that follows the project plays faster or slower by the
+        // project's tempo over its own.
+        const double rate = useSample && sample->tempo > 0.0 && transport.bpm > 0.0 ? transport.bpm / sample->tempo : 1.0;
+
         const float rmsStep = (riser.signalRms - startRms) / (float) b.numSamples;
         float signalRms = startRms;
         for (int n = 0; n < b.numSamples; ++n)
@@ -514,19 +538,37 @@ private:
             signalRms += rmsStep;
 
             if (useSample)
-                addSampleRiser (b, n, *sample, level, signalRms);
+                addSampleRiser (b, n, *sample, rate, level, signalRms);
             else
                 addNoiseRiser (b, n, cutoff, level, signalRms);
         }
+
+        const bool playing = useSample && ! riser.armed && riser.wait == 0;
+        riserPlayhead = playing ? (float) (riser.samplePos / sample->length()) : -1.0f;
     }
 
-    void addSampleRiser (const Block& b, int n, const RiserSample& sample, float level, float signalRms) noexcept
+    void addSampleRiser (const Block& b, int n, const RiserSample& sample, double rate, float level, float signalRms) noexcept
     {
         if (level <= 0.0f)
         {
             // Fully down (Amount or riser depth at 0): hold at the top, so the
             // next build-up starts on the sample's first sample.
-            riser.samplePos = 0;
+            riser.samplePos = 0.0;
+            riser.armed     = true;
+            return;
+        }
+
+        if (riser.armed)
+        {
+            // The build-up starts: the sample starts on the host's next bar line.
+            const auto start = nextBarStart (n);
+            riser.armed     = false;
+            riser.wait      = start.wait;
+            riser.samplePos = std::fmod (start.pastSeconds * sr * rate, (double) sample.length());
+        }
+        if (riser.wait > 0)
+        {
+            --riser.wait;
             return;
         }
 
@@ -534,10 +576,78 @@ private:
         const float gain = sample.unitGain * level * signalRms;
         const int last = sample.audio.getNumChannels() - 1;
         for (int ch = 0; ch < b.channels; ++ch)
-            b.data[ch][n] += sample.audio.getSample (juce::jmin (ch, last), riser.samplePos) * gain;
+            b.data[ch][n] += readLooped (sample.audio.getReadPointer (juce::jmin (ch, last)), sample.length(), riser.samplePos) * gain;
 
-        if (++riser.samplePos >= sample.length())
-            riser.samplePos = 0;
+        riser.samplePos += rate;
+        if (riser.samplePos >= (double) sample.length())
+            riser.samplePos -= (double) sample.length();
+    }
+
+    // Where the riser starts, from sample `n` of this block: on the host's next
+    // bar line, as `wait` samples from now. Just past a bar line (within a
+    // sixteenth) it starts now, `pastSeconds` into the sample, so it is still in
+    // step. Without a playing transport it starts now, from the top.
+    struct BarStart
+    {
+        int    wait        = 0;
+        double pastSeconds = 0.0;
+    };
+    BarStart nextBarStart (int n) const noexcept
+    {
+        const auto& t = transport;
+        if (! t.playing || t.bpm <= 0.0 || t.barLength <= 0.0)
+            return {};
+
+        const double quarterNotesPerSample = t.bpm / (60.0 * sr);
+        double intoBar = std::fmod (t.ppq + n * quarterNotesPerSample - t.barStart, t.barLength);
+        if (intoBar < 0.0)
+            intoBar += t.barLength;
+
+        constexpr double lateStart = 0.25;   // a sixteenth note, in quarter notes
+        if (intoBar <= lateStart)
+            return { 0, intoBar * 60.0 / t.bpm };
+        return { (int) std::ceil ((t.barLength - intoBar) / quarterNotesPerSample), 0.0 };
+    }
+
+    // The sample at a fractional position in a loop of `length` (4-point
+    // Catmull-Rom, wrapping around the loop). Exact at whole positions.
+    static float readLooped (const float* x, int length, double pos) noexcept
+    {
+        const int   i = (int) pos;
+        const auto  f = (float) (pos - i);
+        const auto at = [x, length] (int k) { return x[(k % length + length) % length]; };
+        const float y0 = x[i];
+        if (f <= 0.0f)
+            return y0;
+
+        const float ym1 = at (i - 1);
+        const float y1  = at (i + 1);
+        const float y2  = at (i + 2);
+        const float c1 = 0.5f * (y1 - ym1);
+        const float c2 = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
+        const float c3 = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
+        return ((c3 * f + c2) * f + c1) * f + y0;
+    }
+
+    // Adopts a newly handed-over riser sample (the replaced one goes back to
+    // the message thread to free). The same sample re-rendered (for a new
+    // tempo, say) carries on from the same point in its loop; a different one
+    // starts from the top.
+    void adoptRiserSample() noexcept
+    {
+        const RiserSample* before = riserSample.current();
+        const int    beforeId     = before != nullptr ? before->sourceId : -1;
+        const double beforeLength = before != nullptr ? (double) before->length() : 0.0;
+
+        bool adopted = false;
+        const RiserSample* now = riserSample.acquire (&adopted);
+        if (! adopted || now == nullptr)
+            return;
+
+        if (now->sourceId == beforeId && beforeLength > 0.0 && now->length() > 0)
+            riser.samplePos = std::fmod (riser.samplePos / beforeLength * now->length(), (double) now->length());
+        else
+            riser.samplePos = 0.0;
     }
 
     void addNoiseRiser (const Block& b, int n, float cutoff, float level, float signalRms) noexcept
@@ -704,9 +814,13 @@ private:
         float unitGain   = 1.0f;
         float meanSquare = 0.0f;
         float signalRms  = 0.0f;
-        int   samplePos  = 0;
+        double samplePos = 0.0;    // in the sample's loop, fractional when playing at another tempo
+        bool   armed     = true;   // down: the next build-up waits for a bar line
+        int    wait      = 0;      // samples still to wait for it
     };
     Riser riser;
+    Transport transport;
+    std::atomic<float> riserPlayhead { -1.0f };
 
     // User riser sample, handed from the message thread to the audio thread.
     RtHandoff<RiserSample> riserSample;
