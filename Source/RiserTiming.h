@@ -54,12 +54,12 @@ struct RiserTiming
         return juce::jlimit (minBpm, maxBpm, bars * quarterNotesPerBar() * 60.0 / seconds);
     }
 
-    bool operator== (const RiserTiming& o) const noexcept
+    friend bool operator== (const RiserTiming& a, const RiserTiming& b) noexcept
     {
-        return juce::approximatelyEqual (bpm, o.bpm) && beatsPerBar == o.beatsPerBar && beatUnit == o.beatUnit
-            && matchProject == o.matchProject && keepPitch == o.keepPitch && loopBars == o.loopBars;
+        return juce::approximatelyEqual (a.bpm, b.bpm) && a.beatsPerBar == b.beatsPerBar && a.beatUnit == b.beatUnit
+            && a.matchProject == b.matchProject && a.keepPitch == b.keepPitch && a.loopBars == b.loopBars;
     }
-    bool operator!= (const RiserTiming& o) const noexcept { return ! (*this == o); }
+    friend bool operator!= (const RiserTiming& a, const RiserTiming& b) noexcept { return ! (a == b); }
 
     /** A first guess for a freshly loaded sample: a tempo written in its name
         ("128 BPM", "128bpm"), else a bar count in its name ("8 Bars") over its

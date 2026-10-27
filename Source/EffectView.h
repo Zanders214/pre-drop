@@ -101,14 +101,14 @@ public:
     }
 
     /** Called by the BACK button. */
-    std::function<void()> onBack;
+    void setOnBack (std::function<void()> callback) { onBack = std::move (callback); }
 
     void setUiScale (float s) noexcept
     {
         uiScale = juce::jmax (0.1f, s);
         pills.setUiScale (uiScale);
         knobLookAndFeel.setUiScale (uiScale);
-        for (auto& k : knobs)
+        for (const auto& k : knobs)
             k->setUiScale (uiScale);
     }
 
@@ -122,12 +122,12 @@ public:
         if (effect == Effect::delay)
         {
             const bool synced = syncPill.getToggleState();
-            knob (EffectSettings::delayNote)->setVisible (synced);
-            knob (EffectSettings::delayTime)->setVisible (! synced);
+            knob (EffectSettings::Id::delayNote)->setVisible (synced);
+            knob (EffectSettings::Id::delayTime)->setVisible (! synced);
         }
 
         const bool builtIn = usesBuiltIn();
-        for (auto& k : knobs)
+        for (const auto& k : knobs)
         {
             k->setEnabled (builtIn);
             k->setAlpha (builtIn ? 1.0f : 0.35f);
@@ -158,7 +158,7 @@ public:
     // For tests.
     SettingKnob*      knob (EffectSettings::Id id) noexcept
     {
-        for (auto& k : knobs)
+        for (const auto& k : knobs)
             if (k->settingId() == id)
                 return k.get();
         return nullptr;
@@ -225,8 +225,8 @@ public:
 
         // The two TIME knobs share a place (SYNC shows one of them).
         std::vector<SettingKnob*> placed;
-        for (auto& k : knobs)
-            if (k->settingId() != EffectSettings::delayTime)
+        for (const auto& k : knobs)
+            if (k->settingId() != EffectSettings::Id::delayTime)
                 placed.push_back (k.get());
         const int columns = juce::jmax (3, (int) placed.size());
         const int colW    = area.getWidth() / columns;
@@ -236,8 +236,8 @@ public:
         {
             const auto cell = row.removeFromLeft (colW).reduced (px (4.0f), 0);
             k->setBounds (cell);
-            if (k->settingId() == EffectSettings::delayNote)
-                knob (EffectSettings::delayTime)->setBounds (cell);
+            if (k->settingId() == EffectSettings::Id::delayNote)
+                knob (EffectSettings::Id::delayTime)->setBounds (cell);
         }
     }
 
@@ -245,12 +245,24 @@ private:
     juce::Colour accent() const
     {
         using namespace PreDrop::Palette;
-        return effect == Effect::reverb ? violet : effect == Effect::delay ? pink : cyan;
+        switch (effect)
+        {
+            case Effect::reverb: return violet;
+            case Effect::delay:  return pink;
+            case Effect::hpf:    break;
+        }
+        return cyan;
     }
 
     juce::String title() const
     {
-        return effect == Effect::reverb ? "REVERB" : effect == Effect::delay ? "DELAY" : "HIGH-PASS";
+        switch (effect)
+        {
+            case Effect::reverb: return "REVERB";
+            case Effect::delay:  return "DELAY";
+            case Effect::hpf:    break;
+        }
+        return "HIGH-PASS";
     }
 
     // A line under the header: what the settings do, or why they don't apply.
@@ -264,10 +276,10 @@ private:
             case Effect::reverb: return "The room grows to SIZE as Amount rises.";
             case Effect::delay:
             {
-                const auto settings = processor.getEffectSettings();
+                const auto settings = effectSettingsOf (processor.getState());
                 const double tempo  = processor.getRiser().getHostTempo();
                 const auto ms = juce::roundToInt (settings.delaySeconds (tempo) * 1000.0);
-                if (! settings.isOn (EffectSettings::delaySync))
+                if (! settings.isOn (EffectSettings::Id::delaySync))
                     return "The echoes grow to FEEDBACK as Amount rises.";
                 return "Echoes every " + juce::String (ms) + " ms"
                      + (tempo > 0.0 ? juce::String() : juce::String (" (at 120 BPM until the project plays)")) + ".";
@@ -294,6 +306,7 @@ private:
     juce::Rectangle<int> noteArea;
     juce::String shownNote;
     float uiScale = 1.0f;
+    std::function<void()> onBack;   // the BACK button
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EffectView)
 };

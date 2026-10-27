@@ -55,38 +55,38 @@ void testMappingBoundaries()
     std::printf ("Mapping boundaries:\n");
 
     const float eps = 1.0e-9f;
-    const auto at0 = PreDropEngine::mapMacro (0.0f);
+    const auto at0 = MacroMapping::mapMacro (0.0f);
     check (approx (at0.hpfCutoffHz, 20.0f, 0.01f), "at amount=0 HPF cutoff sits at 20 Hz");
     check (at0.reverbWet  < eps, "at amount=0 reverb is silent");
     check (at0.delayWet   < eps, "at amount=0 delay is silent");
     check (at0.riserLevel < eps, "at amount=0 riser is silent");
 
     // No staggered start points: one percent of Amount engages all four.
-    const auto at1pc = PreDropEngine::mapMacro (0.01f);
+    const auto at1pc = MacroMapping::mapMacro (0.01f);
     check (at1pc.hpfCutoffHz > 20.0f && at1pc.reverbWet > 0.0f && at1pc.delayWet > 0.0f && at1pc.riserLevel > 0.0f,
            "at amount=1% every effect is already engaged");
 
-    const auto at1 = PreDropEngine::mapMacro (1.0f);
+    const auto at1 = MacroMapping::mapMacro (1.0f);
     check (approx (at1.hpfCutoffHz, 800.0f, 0.5f),  "at amount=1 HPF cutoff reaches 800 Hz (default depth)");
     check (approx (at1.riserLevel, 0.5f, 1.0e-6f), "at amount=1 riser sits at -6 dB re the signal (default depth)");
-    check (approx (at1.delayFeedback, PreDropEngine::maxDelayFeedback, 1.0e-6f) && at1.delayFeedback <= 0.6f,
+    check (approx (at1.delayFeedback, MacroMapping::maxDelayFeedback, 1.0e-6f) && at1.delayFeedback <= 0.6f,
            "delay feedback tops out at 0.6, bounding in-phase echo build-up");
 
     // Riser level is linear in Amount, so half the knob is half the level.
-    check (approx (PreDropEngine::mapMacro (0.5f).riserLevel, 0.5f * at1.riserLevel, 1.0e-6f),
+    check (approx (MacroMapping::mapMacro (0.5f).riserLevel, 0.5f * at1.riserLevel, 1.0e-6f),
            "riser level is linear in Amount");
 
     // Monotonic build-up: more knob never means less of any effect. Reverb and
     // delay are compared by level (gain x tail / feedback build-up), since their
     // raw gains are compensated as the room and the feedback grow.
-    const auto reverbLevel = [] (const PreDropEngine::Targets& x) { return x.reverbWet * PreDropEngine::reverbWetGain (x.reverbSize); };
+    const auto reverbLevel = [] (const PreDropEngine::Targets& x) { return x.reverbWet * MacroMapping::reverbWetGain (x.reverbSize); };
     const auto delayLevel  = [] (const PreDropEngine::Targets& x) { return x.delayWet / std::sqrt (1.0f - x.delayFeedback * x.delayFeedback); };
 
     bool monotonic = true;
-    PreDropEngine::Targets prev = PreDropEngine::mapMacro (0.0f);
+    PreDropEngine::Targets prev = MacroMapping::mapMacro (0.0f);
     for (int i = 1; i <= 100; ++i)
     {
-        const auto cur = PreDropEngine::mapMacro ((float) i / 100.0f);
+        const auto cur = MacroMapping::mapMacro ((float) i / 100.0f);
         monotonic = monotonic
                  && cur.hpfCutoffHz   >= prev.hpfCutoffHz   - 1.0e-3f
                  && cur.reverbSize    >= prev.reverbSize    - 1.0e-6f
@@ -108,8 +108,8 @@ void testDepthScaling()
     const float eps = 1.0e-6f;
     using Depths = PreDropEngine::Depths;
 
-    const auto full = PreDropEngine::mapMacro (1.0f);
-    const auto fullExplicit = PreDropEngine::mapMacro (1.0f, Depths {});
+    const auto full = MacroMapping::mapMacro (1.0f);
+    const auto fullExplicit = MacroMapping::mapMacro (1.0f, Depths {});
     check (approx (full.reverbWet, fullExplicit.reverbWet, eps)
         && approx (full.hpfCutoffHz, fullExplicit.hpfCutoffHz, eps),
         "mapMacro(amount) uses the default depths");
@@ -121,27 +121,27 @@ void testDepthScaling()
 
     // Depth 0 silences just that effect; the others are untouched.
     Depths noReverb; noReverb.reverb = 0.0f;
-    const auto rv0 = PreDropEngine::mapMacro (1.0f, noReverb);
+    const auto rv0 = MacroMapping::mapMacro (1.0f, noReverb);
     check (rv0.reverbWet < eps,                           "reverb depth 0 silences reverb at full amount");
     check (approx (rv0.delayWet, full.delayWet, eps),     "reverb depth 0 leaves delay untouched");
     check (approx (rv0.riserLevel, full.riserLevel, eps), "reverb depth 0 leaves riser untouched");
 
     Depths noDelay; noDelay.delay = 0.0f;
-    check (PreDropEngine::mapMacro (1.0f, noDelay).delayWet < eps, "delay depth 0 silences delay");
+    check (MacroMapping::mapMacro (1.0f, noDelay).delayWet < eps, "delay depth 0 silences delay");
 
     Depths noRiser; noRiser.riser = 0.0f;
-    check (PreDropEngine::mapMacro (1.0f, noRiser).riserLevel < eps, "riser depth 0 silences riser");
+    check (MacroMapping::mapMacro (1.0f, noRiser).riserLevel < eps, "riser depth 0 silences riser");
 
     // Depth 1 doubles each gain-type effect relative to the default.
     Depths maxed; maxed.reverb = 1.0f; maxed.delay = 1.0f; maxed.riser = 1.0f; maxed.hpf = 1.0f;
-    const auto mx = PreDropEngine::mapMacro (1.0f, maxed);
+    const auto mx = MacroMapping::mapMacro (1.0f, maxed);
     check (approx (mx.reverbWet,  2.0f * full.reverbWet,  eps), "reverb depth 100% doubles the reverb");
     check (approx (mx.delayWet,   2.0f * full.delayWet,   eps), "delay depth 100% doubles the delay");
     check (approx (mx.riserLevel, 2.0f * full.riserLevel, eps), "riser depth 100% doubles the riser");
 
     // HPF depth moves the top of the sweep: off, 800 Hz, then two octaves more.
     Depths noHpf; noHpf.hpf = 0.0f;
-    check (approx (PreDropEngine::mapMacro (1.0f, noHpf).hpfCutoffHz, 20.0f, 0.01f),
+    check (approx (MacroMapping::mapMacro (1.0f, noHpf).hpfCutoffHz, 20.0f, 0.01f),
            "HPF depth 0 keeps the cutoff at 20 Hz (low-cut effectively off)");
     check (approx (mx.hpfCutoffHz, 3200.0f, 2.0f), "HPF depth 100% reaches 3.2 kHz");
 }
@@ -577,9 +577,9 @@ void testIdleEffectsPassThrough()
     // high-pass and a toned delay, brought back on silence, stay silent.
     PreDropEngine fresh;
     EffectSettings settings;
-    settings.set (EffectSettings::reverbPreDelay, 200.0f);
-    settings.set (EffectSettings::hpfSlope, 1.0f);
-    settings.set (EffectSettings::delayTone, 2000.0f);
+    settings.set (EffectSettings::Id::reverbPreDelay, 200.0f);
+    settings.set (EffectSettings::Id::hpfSlope, 1.0f);
+    settings.set (EffectSettings::Id::delayTone, 2000.0f);
     fresh.setEffectSettings (settings);
     fresh.setRiserDepth (0.0f);
     fresh.setWetOnly (true);
@@ -818,20 +818,20 @@ void testVisualModelMatchesEngine()
             const float a = (float) i / 100.0f;
             PreDropEngine::Depths d; d.hpf = depth;
             cutoffMatches = cutoffMatches
-                         && approx (PreDropVisualModel::cutoffHz (a, depth), PreDropEngine::mapMacro (a, d).hpfCutoffHz, 0.05f);
+                         && approx (PreDropVisualModel::cutoffHz (a, depth), MacroMapping::mapMacro (a, d).hpfCutoffHz, 0.05f);
         }
     check (cutoffMatches, "editor cutoff readout matches the engine HPF cutoff at every amount and depth");
 
     // The chips light up exactly when the engine's effects switch on.
-    const auto at0 = PreDropEngine::mapMacro (0.0f);
-    const auto at1pc = PreDropEngine::mapMacro (0.01f);
+    const auto at0 = MacroMapping::mapMacro (0.0f);
+    const auto at1pc = MacroMapping::mapMacro (0.01f);
     check (! PreDropVisualModel::engaged (0.0f, 0.5f) && at0.reverbWet <= 0.0f && at0.riserLevel <= 0.0f,
            "at amount=0 nothing is engaged in UI or DSP");
     check (PreDropVisualModel::engaged (0.01f, 0.5f) && at1pc.reverbWet > 0.0f && at1pc.riserLevel > 0.0f,
            "at amount=1% everything is engaged in UI and DSP");
 
     PreDropEngine::Depths noDelay; noDelay.delay = 0.0f;
-    check (! PreDropVisualModel::engaged (1.0f, 0.0f) && PreDropEngine::mapMacro (1.0f, noDelay).delayWet <= 0.0f,
+    check (! PreDropVisualModel::engaged (1.0f, 0.0f) && MacroMapping::mapMacro (1.0f, noDelay).delayWet <= 0.0f,
            "a depth of 0 is idle in both UI and DSP");
 }
 // ---- Effect settings: what each one means, and that none moves the level.
@@ -841,57 +841,57 @@ void testEffectSettingsValues()
     using S = EffectSettings;
 
     const S defaults;
-    check (juce::exactlyEqual (defaults[S::reverbSize], 0.95f) && defaults.isOn (S::delaySync) && defaults.note() == 6 && ! defaults.hpfSteep(),
+    check (juce::exactlyEqual (defaults[S::Id::reverbSize], 0.95f) && defaults.isOn (S::Id::delaySync) && defaults.note() == 6 && ! defaults.hpfSteep(),
            "the defaults are PreDrop's sound before the settings existed (95% room, a synced 1/8D)");
 
-    const auto plain = PreDropEngine::mapMacro (0.7f, PreDropEngine::Depths {});
-    const auto same  = PreDropEngine::mapMacro (0.7f, PreDropEngine::Depths {}, defaults);
+    const auto plain = MacroMapping::mapMacro (0.7f, PreDropEngine::Depths {});
+    const auto same  = MacroMapping::mapMacro (0.7f, PreDropEngine::Depths {}, defaults);
     check (juce::exactlyEqual (plain.reverbSize, same.reverbSize) && juce::exactlyEqual (plain.delayFeedback, same.delayFeedback)
              && juce::exactlyEqual (plain.riserCutoffHz, same.riserCutoffHz),
            "the default settings map exactly as before");
-    check (approx (PreDropEngine::mapMacro (0.0f).reverbSize, 0.30f, 1.0e-5f) && approx (PreDropEngine::mapMacro (1.0f).reverbSize, 0.95f, 1.0e-5f),
+    check (approx (MacroMapping::mapMacro (0.0f).reverbSize, 0.30f, 1.0e-5f) && approx (MacroMapping::mapMacro (1.0f).reverbSize, 0.95f, 1.0e-5f),
            "the room grows from 0.30 to SIZE");
 
     S custom;
-    custom.set (S::reverbSize, 0.5f);
-    custom.set (S::delayFeedback, 0.3f);
-    custom.set (S::riserStart, 100.0f);
-    custom.set (S::riserEnd, 2000.0f);
-    const auto top    = PreDropEngine::mapMacro (1.0f, PreDropEngine::Depths {}, custom);
-    const auto bottom = PreDropEngine::mapMacro (0.0f, PreDropEngine::Depths {}, custom);
+    custom.set (S::Id::reverbSize, 0.5f);
+    custom.set (S::Id::delayFeedback, 0.3f);
+    custom.set (S::Id::riserStart, 100.0f);
+    custom.set (S::Id::riserEnd, 2000.0f);
+    const auto top    = MacroMapping::mapMacro (1.0f, PreDropEngine::Depths {}, custom);
+    const auto bottom = MacroMapping::mapMacro (0.0f, PreDropEngine::Depths {}, custom);
     check (approx (top.reverbSize, 0.5f, 1.0e-5f) && approx (top.delayFeedback, 0.3f, 1.0e-5f),
            "SIZE and FEEDBACK are where they end at full Amount");
     check (approx (bottom.riserCutoffHz, 100.0f, 0.01f) && approx (top.riserCutoffHz, 2000.0f, 0.1f),
            "the noise sweeps from START to END");
 
     S clamped;
-    clamped.set (S::delayFeedback, 5.0f);
-    clamped.set (S::reverbSize, -1.0f);
-    check (juce::exactlyEqual (clamped[S::delayFeedback], 0.9f) && juce::exactlyEqual (clamped[S::reverbSize], 0.1f), "values are kept within their ranges");
+    clamped.set (S::Id::delayFeedback, 5.0f);
+    clamped.set (S::Id::reverbSize, -1.0f);
+    check (juce::exactlyEqual (clamped[S::Id::delayFeedback], 0.9f) && juce::exactlyEqual (clamped[S::Id::reverbSize], 0.1f), "values are kept within their ranges");
 
     S time;
-    time.set (S::delayNote, 8.0f);   // 1/4
+    time.set (S::Id::delayNote, 8.0f);   // 1/4
     check (approx ((float) time.delaySeconds (120.0), 0.5f, 1.0e-6f) && approx ((float) time.delaySeconds (0.0), 0.5f, 1.0e-6f)
              && approx ((float) time.delaySeconds (60.0), 1.0f, 1.0e-6f),
            "a synced 1/4 is a beat at the tempo (120 BPM without one)");
-    time.set (S::delayNote, 12.0f);   // 1/1
+    time.set (S::Id::delayNote, 12.0f);   // 1/1
     check (approx ((float) time.delaySeconds (30.0), 4.0f, 1.0e-6f), "and never longer than the longest delay");
-    time.set (S::delaySync, 0.0f);
-    time.set (S::delayTime, 250.0f);
+    time.set (S::Id::delaySync, 0.0f);
+    time.set (S::Id::delayTime, 250.0f);
     check (approx ((float) time.delaySeconds (128.0), 0.25f, 1.0e-6f), "unsynced, TIME is milliseconds");
 
     S q;
     check (approx (q.hpfQ(), 0.7071f, 1.0e-3f) && approx (q.riserQ(), 1.5f, 1.0e-3f), "no resonance by default; the riser's Q 1.5");
-    q.set (S::hpfResonance, 1.0f);
-    q.set (S::riserResonance, 1.0f);
+    q.set (S::Id::hpfResonance, 1.0f);
+    q.set (S::Id::riserResonance, 1.0f);
     check (approx (q.hpfQ(), 8.485f, 0.01f) && approx (q.riserQ(), 8.0f, 0.01f), "and up to a sharp peak");
 
-    check (S::format (S::reverbSize, 0.95f) == "95%" && S::format (S::delayTime, 120.4f) == "120 ms"
-             && S::format (S::delaySync, 1.0f) == "ON" && S::format (S::delayPingPong, 0.0f) == "OFF"
-             && S::format (S::delayNote, 6.0f) == "1/8D" && S::format (S::hpfSlope, 1.0f) == "24 dB"
-             && S::format (S::hpfSlope, 0.0f) == "12 dB" && S::format (S::delayTone, 20000.0f) == "OPEN"
-             && S::format (S::delayTone, 3000.0f) == "3.00 kHz" && S::format (S::riserEnd, 12000.0f) == "12.0 kHz"
-             && S::format (S::riserStart, 200.0f) == "200 Hz",
+    check (S::format (S::Id::reverbSize, 0.95f) == "95%" && S::format (S::Id::delayTime, 120.4f) == "120 ms"
+             && S::format (S::Id::delaySync, 1.0f) == "ON" && S::format (S::Id::delayPingPong, 0.0f) == "OFF"
+             && S::format (S::Id::delayNote, 6.0f) == "1/8D" && S::format (S::Id::hpfSlope, 1.0f) == "24 dB"
+             && S::format (S::Id::hpfSlope, 0.0f) == "12 dB" && S::format (S::Id::delayTone, 20000.0f) == "OPEN"
+             && S::format (S::Id::delayTone, 3000.0f) == "3.00 kHz" && S::format (S::Id::riserEnd, 12000.0f) == "12.0 kHz"
+             && S::format (S::Id::riserStart, 200.0f) == "200 Hz",
            "values read as PreDrop shows them");
 }
 
@@ -955,15 +955,15 @@ void testEffectSettingsKeepTheLevel()
     };
 
     for (const auto& [name, settings, effect] : {
-             std::tuple { "a narrow reverb", with ({ { S::reverbWidth, 0.0f } }), 0 },
-             std::tuple { "a damped, pre-delayed room", with ({ { S::reverbDamping, 1.0f }, { S::reverbPreDelay, 120.0f } }), 0 },
-             std::tuple { "a dark delay", with ({ { S::delayTone, 1000.0f } }), 1 },
-             std::tuple { "a dark delay without feedback", with ({ { S::delayTone, 2000.0f }, { S::delayFeedback, 0.0f } }), 1 },
-             std::tuple { "a ping-pong delay", with ({ { S::delayPingPong, 1.0f } }), 1 },
-             std::tuple { "a free 1.5 s delay", with ({ { S::delaySync, 0.0f }, { S::delayTime, 1500.0f } }), 1 },
-             std::tuple { "a whistling riser", with ({ { S::riserResonance, 1.0f } }), 2 },
-             std::tuple { "a wide riser", with ({ { S::riserResonance, 0.0f } }), 2 },
-             std::tuple { "a low riser", with ({ { S::riserStart, 50.0f }, { S::riserEnd, 2000.0f } }), 2 } })
+             std::tuple { "a narrow reverb", with ({ { S::Id::reverbWidth, 0.0f } }), 0 },
+             std::tuple { "a damped, pre-delayed room", with ({ { S::Id::reverbDamping, 1.0f }, { S::Id::reverbPreDelay, 120.0f } }), 0 },
+             std::tuple { "a dark delay", with ({ { S::Id::delayTone, 1000.0f } }), 1 },
+             std::tuple { "a dark delay without feedback", with ({ { S::Id::delayTone, 2000.0f }, { S::Id::delayFeedback, 0.0f } }), 1 },
+             std::tuple { "a ping-pong delay", with ({ { S::Id::delayPingPong, 1.0f } }), 1 },
+             std::tuple { "a free 1.5 s delay", with ({ { S::Id::delaySync, 0.0f }, { S::Id::delayTime, 1500.0f } }), 1 },
+             std::tuple { "a whistling riser", with ({ { S::Id::riserResonance, 1.0f } }), 2 },
+             std::tuple { "a wide riser", with ({ { S::Id::riserResonance, 0.0f } }), 2 },
+             std::tuple { "a low riser", with ({ { S::Id::riserStart, 50.0f }, { S::Id::riserEnd, 2000.0f } }), 2 } })
     {
         const double db = wetLevelDb (settings, effect);
         check (near6 (db), std::string (name) + " stays at -6 dB (" + std::to_string (db) + " dB)");
@@ -1015,25 +1015,25 @@ void testEffectSettingsSound()
     };
 
     S quarter;
-    quarter.set (S::delayNote, 8.0f);   // 1/4
+    quarter.set (S::Id::delayNote, 8.0f);   // 1/4
     const auto at100 = impulse (quarter, true, 100.0);
     check (std::abs (firstAbove (at100, 0, 0.01f) - (int) (0.6 * sr)) <= 2, "a synced 1/4 echoes a beat later at 100 BPM (0.6 s)");
 
     S free;
-    free.set (S::delaySync, 0.0f);
-    free.set (S::delayTime, 200.0f);
+    free.set (S::Id::delaySync, 0.0f);
+    free.set (S::Id::delayTime, 200.0f);
     const auto at200 = impulse (free, true, 100.0);
     check (std::abs (firstAbove (at200, 0, 0.01f) - (int) (0.2 * sr)) <= 2, "unsynced, it echoes after TIME (200 ms)");
 
     S pingPong = free;
-    pingPong.set (S::delayPingPong, 1.0f);
+    pingPong.set (S::Id::delayPingPong, 1.0f);
     const auto bounced = impulse (pingPong, true, 100.0);
     const int left = firstAbove (bounced, 0, 0.01f), right = firstAbove (bounced, 1, 0.01f);
     check (std::abs (left - (int) (0.2 * sr)) <= 2 && std::abs (right - (int) (0.4 * sr)) <= 2,
            "PING-PONG bounces the echoes left, then right");
 
     S dark = free;
-    dark.set (S::delayTone, 800.0f);
+    dark.set (S::Id::delayTone, 800.0f);
     const auto darkEcho = impulse (dark, true, 100.0);
     const auto brightEcho = impulse (free, true, 100.0);
     const auto peakNear = [] (const juce::AudioBuffer<float>& b, int at)
@@ -1044,7 +1044,7 @@ void testEffectSettingsSound()
            "TONE smooths the echoes (a dark echo's click is lower)");
 
     S gap;
-    gap.set (S::reverbPreDelay, 100.0f);
+    gap.set (S::Id::reverbPreDelay, 100.0f);
     const auto direct  = impulse (S {}, false, 100.0);
     const auto delayed = impulse (gap, false, 100.0);
     const int onset = firstAbove (direct, 0, 1.0e-4f), later = firstAbove (delayed, 0, 1.0e-4f);
@@ -1076,9 +1076,9 @@ void testEffectSettingsSound()
         return level;
     };
     S steep;
-    steep.set (S::hpfSlope, 1.0f);
+    steep.set (S::Id::hpfSlope, 1.0f);
     S resonant;
-    resonant.set (S::hpfResonance, 1.0f);
+    resonant.set (S::Id::hpfResonance, 1.0f);
     const float gentleLevel = belowCutoff (S {}), steepLevel = belowCutoff (steep);
     check (steepLevel < 0.1f * gentleLevel, "a 24 dB slope cuts two octaves below the cutoff far harder than 12 dB");
     check (std::isfinite (belowCutoff (resonant)), "a resonant high-pass stays stable");
@@ -1119,9 +1119,9 @@ void testEffectSettingsSound()
     for (const bool steepSlope : { false, true })
     {
         S flat, peaked;
-        flat.set (S::hpfSlope, steepSlope ? 1.0f : 0.0f);
+        flat.set (S::Id::hpfSlope, steepSlope ? 1.0f : 0.0f);
         peaked = flat;
-        peaked.set (S::hpfResonance, 1.0f);
+        peaked.set (S::Id::hpfResonance, 1.0f);
         const double lift = pinkThroughHpf (peaked) - pinkThroughHpf (flat);
         check (lift > 1.0 && lift < 9.0, std::string ("full resonance at ") + (steepSlope ? "24" : "12")
                                            + " dB lifts the level only a little (" + std::to_string (lift) + " dB)");

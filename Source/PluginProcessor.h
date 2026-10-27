@@ -71,9 +71,6 @@ public:
     /** Where the riser sample is in its loop (0..1), or -1 while it isn't playing. */
     float getRiserPlayhead() const noexcept { return engine.getRiserPlayhead(); }
 
-    /** This instance's effect settings, from its parameters. */
-    EffectSettings getEffectSettings() const noexcept;
-
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     void timerCallback() override;
@@ -88,3 +85,7 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreDropAudioProcessor)
 };
+
+/** A processor's effect settings, from its parameters. */
+EffectSettings effectSettingsOf (const juce::AudioProcessorValueTreeState& state) noexcept;
+

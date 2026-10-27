@@ -89,7 +89,7 @@ public:
     /** Writes the factory presets into the folder, once: after that, one that
         was deleted stays deleted, and a preset of the same name is never
         replaced. Returns how many were written. */
-    int installFactoryPresets();
+    int installFactoryPresets() const;
 
 private:
     static juce::String write (const juce::ValueTree& preset, const juce::File& file);
@@ -97,7 +97,7 @@ private:
     void setCurrentName (const juce::String& name);
 
     PreDropAudioProcessor& processor;
-    juce::File             presetFolder;
+    juce::File             presetFolder { defaultFolder() };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PresetManager)
 };

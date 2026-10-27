@@ -70,8 +70,13 @@ private:
     float displayedDepth (const char* depthId) const;
 
     PreDropAudioProcessor& processorRef;
-    PreDropLookAndFeel     lnf;
-    DepthKnobLookAndFeel   depthLnf;
+    // The pills' and buttons' look, and the depth knobs'.
+    struct Looks
+    {
+        PreDropLookAndFeel   pills;
+        DepthKnobLookAndFeel knobs;
+    };
+    Looks looks;
 
     juce::Slider amountSlider;
     juce::Slider mixSlider;

@@ -11,7 +11,7 @@
     effect chips show, the displayed high-pass cutoff, and the decorative
     "build-up energy" curve used by the histogram + tension readout.
 
-    It intentionally mirrors PreDropEngine::mapMacro so the on-screen indicators
+    It intentionally mirrors MacroMapping::mapMacro so the on-screen indicators
     never drift from the DSP: every effect starts with the first percent of
     Amount, and the HPF sweep (20 Hz -> 800 Hz at the default depth of 0.5, up to
     3.2 kHz at depth 1) is the engine's. The energy curve (energyAt) is purely
@@ -32,7 +32,7 @@ struct PreDropVisualModel
     static bool engaged (float amount, float depth) noexcept { return amount > 0.0f && depth > 0.0f; }
 
     /** Octaves above 20 Hz the HPF reaches at full Amount. Mirrors
-        PreDropEngine::hpfTopOctaves: off at depth 0, 800 Hz at 0.5, 3.2 kHz at 1. */
+        MacroMapping::hpfTopOctaves: off at depth 0, 800 Hz at 0.5, 3.2 kHz at 1. */
     static float hpfTopOctaves (float hpfDepth) noexcept
     {
         const float d = clamp01 (hpfDepth);

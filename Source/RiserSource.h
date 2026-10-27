@@ -66,7 +66,8 @@ public:
         of a fixed number of columns across it (empty for the built-in noise). */
     struct Outline
     {
-        std::vector<float> low, high;
+        std::vector<float> low;
+        std::vector<float> high;
     };
     Outline getOutline() const;
 
@@ -93,7 +94,7 @@ public:
     void renderIfStale();
 
     /** Waits for a background re-render to finish. For tests. */
-    bool waitForRender (int timeoutMs);
+    bool waitForRender (int timeoutMs) const;
 
     /** Adds the sample (if one is loaded) to a state tree being saved. */
     void saveTo (juce::ValueTree& state) const;

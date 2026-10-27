@@ -97,7 +97,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         }
         else
         {
-            NormalisableRange<float> range (spec.min, spec.max);
+            NormalisableRange range (spec.min, spec.max);
             if (spec.centre > 0.0f)
                 range.setSkewForCentre (spec.centre);
             layout.add (std::make_unique<AudioParameterFloat> (ParameterID { spec.id, 1 }, spec.name, range, spec.defaultValue,
@@ -168,7 +168,7 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         };
 
         engine.setAmount      (active ? main.amount.load() : 0.0f);
-        engine.setEffectSettings (active ? main.effectSettings() : getEffectSettings());
+        engine.setEffectSettings (active ? main.effectSettings() : effectSettingsOf (apvts));
         engine.setHpfDepth    (depth (LinkHub::Effect::hpf));
         engine.setReverbDepth (depth (LinkHub::Effect::reverb));
         engine.setDelayDepth  (depth (LinkHub::Effect::delay));
@@ -183,7 +183,7 @@ void PreDropAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         link.publishMainState();
 
         engine.setAmount      (param (ParamID::amount));
-        engine.setEffectSettings (getEffectSettings());
+        engine.setEffectSettings (effectSettingsOf (apvts));
         engine.setHpfDepth    (tracksDoTheRest ? 0.0f : param (ParamID::hpfDepth));
         engine.setReverbDepth (tracksDoTheRest ? 0.0f : param (ParamID::reverbDepth));
         engine.setDelayDepth  (tracksDoTheRest ? 0.0f : param (ParamID::delayDepth));
@@ -258,19 +258,19 @@ void PreDropAudioProcessor::updateTrackProperties (const TrackProperties& proper
     link.setHostTrackName (properties.name);
 }
 
-EffectSettings PreDropAudioProcessor::getEffectSettings() const noexcept
+EffectSettings effectSettingsOf (const juce::AudioProcessorValueTreeState& state) noexcept
 {
     EffectSettings settings;
     for (size_t i = 0; i < settings.values.size(); ++i)
-        settings.values[i] = apvts.getRawParameterValue (EffectSettings::specs[i].id)->load();
+        settings.values[i] = state.getRawParameterValue (EffectSettings::specs[i].id)->load();
     return settings;
 }
 
 PreDropEngine::Transport PreDropAudioProcessor::readTransport() const
 {
     PreDropEngine::Transport transport;
-    const auto* playHead = getPlayHead();
-    const auto position = playHead != nullptr ? playHead->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
+    const auto* host = getPlayHead();
+    const auto position = host != nullptr ? host->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
     if (! position.hasValue())
         return transport;
 

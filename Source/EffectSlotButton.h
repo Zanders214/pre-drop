@@ -40,7 +40,7 @@ public:
     }
 
     /** When set, a click calls this instead of opening the menu. */
-    std::function<void()> onOpen;
+    void setOnOpen (std::function<void()> callback) { onOpen = std::move (callback); }
 
     ~EffectSlotButton() override { setLookAndFeel (nullptr); }
 
@@ -182,6 +182,7 @@ private:
     juce::Array<juce::File>            installed;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::String                       shownLabel { "?" };
+    std::function<void()> onOpen;   // when set, a click calls it instead of opening the menu
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EffectSlotButton)
 };

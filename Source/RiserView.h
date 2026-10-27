@@ -84,7 +84,8 @@ public:
             delta = -delta;
         if (juce::exactlyEqual (delta, 0.0f))
             return;
-        wheelTravel = wheel.isSmooth ? wheelTravel + delta : (delta > 0.0f ? wheelStep : -wheelStep);
+        const float notch = delta > 0.0f ? wheelStep : -wheelStep;
+        wheelTravel = wheel.isSmooth ? wheelTravel + delta : notch;
         const auto steps = (int) (wheelTravel / wheelStep);
         if (steps == 0)
             return;
@@ -189,7 +190,7 @@ public:
     RiserWaveform() = default;
 
     /** Called with the timing a drag asks for. */
-    std::function<void (const RiserTiming&)> onTimingChange;
+    void setOnTimingChange (std::function<void (const RiserTiming&)> callback) { onTimingChange = std::move (callback); }
 
     void setUiScale (float s) noexcept { uiScale = juce::jmax (0.1f, s); }
 
@@ -231,7 +232,7 @@ public:
     /** The bars the view spans (held still while dragging). */
     double spanBars() const noexcept
     {
-        return drag.mode != Drag::none ? drag.span : juce::jmax (sampleBars(), loopBars(), 0.25);
+        return drag.mode != Drag::Mode::none ? drag.span : juce::jmax (sampleBars(), loopBars(), 0.25);
     }
 
     /** The x position of a point `bars` into the sample, and back. */
@@ -259,11 +260,11 @@ public:
         drag.start = shown.timing;
         if (nearLoopEnd (e.position.x))
         {
-            drag.mode = Drag::loopEnd;
+            drag.mode = Drag::Mode::loopEnd;
         }
         else if (held > 0.02 && held < sampleBars())
         {
-            drag.mode        = Drag::stretch;
+            drag.mode        = Drag::Mode::stretch;
             drag.heldSeconds = held * shown.timing.barSeconds();
         }
         drag.span = span;
@@ -271,12 +272,12 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (drag.mode == Drag::none)
+        if (drag.mode == Drag::Mode::none)
             return;
 
         auto t = drag.start;
         const double at = barsAt (e.position.x);
-        if (drag.mode == Drag::loopEnd)
+        if (drag.mode == Drag::Mode::loopEnd)
         {
             t.loopBars = juce::jlimit (1, RiserTiming::maxLoopBars, juce::roundToInt (at));
         }
@@ -355,10 +356,11 @@ public:
     }
 
 private:
+    std::function<void (const RiserTiming&)> onTimingChange;   // a drag asks for this timing
     struct Drag
     {
-        enum Mode { none, stretch, loopEnd };
-        Mode        mode        = none;
+        enum class Mode { none, stretch, loopEnd };
+        Mode        mode        = Mode::none;
         RiserTiming start;                // the timing when the drag began
         double      span        = 1.0;    // the view's bars, held still meanwhile
         double      heldSeconds = 0.0;    // the point of the sample being stretched
@@ -401,7 +403,7 @@ private:
             every *= 2;
 
         g.setFont (Fonts::mono (7.5f * s));
-        const int bars = (int) std::ceil (spanBars() - 1.0e-6);
+        const auto bars = (int) std::ceil (spanBars() - 1.0e-6);
         for (int bar = 0; bar < bars; ++bar)
         {
             const float x = ruler.getX() + (float) bar * barPx;
@@ -481,7 +483,7 @@ private:
     With the built-in noise instead of a sample it shows the noise's sweep:
     where it STARTs and ENDs, and its RESONANCE.
 */
-class RiserView : public juce::Component
+class RiserView final : public juce::Component
 {
 public:
     explicit RiserView (PreDropAudioProcessor& p) : processor (p)
@@ -523,10 +525,10 @@ public:
         pitchPill.setTooltip ("On: time-stretched to the project's tempo, at its own pitch. Off: sped up or slowed down, like tape.");
         pitchPill.onClick = [this] { changeTiming ([] (RiserTiming& t) { t.keepPitch = ! t.keepPitch; }); };
 
-        waveform.onTimingChange = [this] (const RiserTiming& wanted)
+        waveform.setOnTimingChange ([this] (const RiserTiming& wanted)
         {
             changeTiming ([&wanted] (RiserTiming& t) { t = wanted; });
-        };
+        });
         addAndMakeVisible (waveform);
 
         using Id = EffectSettings::Id;
@@ -547,7 +549,7 @@ public:
     }
 
     /** Called by the BACK button. */
-    std::function<void()> onBack;
+    void setOnBack (std::function<void()> callback) { onBack = std::move (callback); }
 
     void setUiScale (float s) noexcept
     {
@@ -555,21 +557,21 @@ public:
         pills.setUiScale (uiScale);
         waveform.setUiScale (uiScale);
         knobLookAndFeel.setUiScale (uiScale);
-        for (auto& k : noiseKnobs)
+        for (const auto& k : noiseKnobs)
             k->setUiScale (uiScale);
     }
 
     /** Follows the riser: its sample, timing and playhead. From the editor's timer. */
     void refresh()
     {
-        auto& riser = processor.getRiser();
+        const auto& riser = processor.getRiser();
 
-        if (const int id = riser.getSampleId(); id != shownId)
+        if (const int id = riser.getSampleId(); id != shown.id)
         {
-            shownId     = id;
-            shownLength = riser.getLengthSeconds();
-            shownName   = riser.getName();
-            waveform.setSample ({ riser.getOutline(), shownLength, riser.getTiming() });
+            shown.id     = id;
+            shown.length = riser.getLengthSeconds();
+            shown.name   = riser.getName();
+            waveform.setSample ({ riser.getOutline(), shown.length, riser.getTiming() });
             updateSourcePill();
             resized();
         }
@@ -577,9 +579,9 @@ public:
         showTiming (riser.getTiming());
         waveform.setPlayhead (processor.getRiserPlayhead());
 
-        if (const auto status = statusText(); status != shownStatus)
+        if (const auto status = statusText(); status != shown.status)
         {
-            shownStatus = status;
+            shown.status = status;
             repaint();
         }
     }
@@ -595,7 +597,7 @@ public:
     /** Sets the sample's meter, as the METER menu does. */
     void setMeter (int beatsPerBar, int beatUnit)
     {
-        changeTiming ([=] (RiserTiming& t)
+        changeTiming ([beatsPerBar, beatUnit] (RiserTiming& t)
         {
             t.beatsPerBar = beatsPerBar;
             t.beatUnit    = beatUnit;
@@ -615,7 +617,7 @@ public:
     RiserWaveform&    wave() noexcept        { return waveform; }
     SettingKnob*      noiseKnob (EffectSettings::Id id) noexcept
     {
-        for (auto& k : noiseKnobs)
+        for (const auto& k : noiseKnobs)
             if (k->settingId() == id)
                 return k.get();
         return nullptr;
@@ -631,15 +633,15 @@ public:
 
         g.setFont (Fonts::sans (8.5f * s, true, 0.08f));
         g.setColour (processor.getRiser().getTiming().matchProject ? Palette::textMid : Palette::textDimmer);
-        g.drawText (shownStatus, statusArea.toFloat(), juce::Justification::centredRight, false);
+        g.drawText (shown.status, areas.status.toFloat(), juce::Justification::centredRight, false);
 
-        if (shownLength <= 0.0)
+        if (shown.length <= 0.0)
         {
             g.setFont (Fonts::sans (9.0f * s, false, 0.02f));
             g.setColour (Palette::textDim);
             g.drawFittedText ("The built-in noise sweeps from START to END as Amount rises.\n"
                               "Load a sample, or drop one on PreDrop, to use your own.",
-                              noteArea, juce::Justification::centred, 2);
+                              areas.note, juce::Justification::centred, 2);
         }
     }
 
@@ -647,7 +649,7 @@ public:
     {
         const float s = uiScale;
         const auto px = [s] (float v) { return (int) std::round (v * s); };
-        const bool sample = shownLength > 0.0;
+        const bool sample = shown.length > 0.0;
 
         auto area = getLocalBounds().reduced (px (10.0f), px (8.0f));
         const int gap = px (6.0f);
@@ -655,7 +657,7 @@ public:
         auto header = area.removeFromTop (px (14.0f));
         backButton.setBounds (header.removeFromLeft (px (46.0f)));
         header.removeFromLeft (gap);
-        statusArea = header.removeFromRight (px (84.0f));
+        areas.status = header.removeFromRight (px (84.0f));
         header.removeFromRight (gap);
         sourcePill.setBounds (header);
         updateSourcePill();
@@ -666,17 +668,17 @@ public:
             c->setVisible (sample);
 
         waveform.setVisible (sample);
-        for (auto& k : noiseKnobs)
+        for (const auto& k : noiseKnobs)
             k->setVisible (! sample);
         if (! sample)
         {
             // The noise's sweep: a line on what it does, then its three knobs.
             area.removeFromTop (px (4.0f));
-            noteArea = area.removeFromTop (px (24.0f));
+            areas.note = area.removeFromTop (px (24.0f));
             const int colW   = area.getWidth() / 4;
             const int height = juce::jmin (area.getHeight(), px (72.0f));
             auto row = area.withSizeKeepingCentre (colW * (int) noiseKnobs.size(), height);
-            for (auto& k : noiseKnobs)
+            for (const auto& k : noiseKnobs)
                 k->setBounds (row.removeFromLeft (colW).reduced (px (4.0f), 0));
             return;
         }
@@ -719,15 +721,15 @@ private:
 
     void showTiming (const RiserTiming& t)
     {
-        const juce::ScopedValueSetter<bool> quiet (updating, true);
+        const juce::ScopedValueSetter quiet (updating, true);
 
         // The chip being dragged or typed into keeps its own value.
         if (! tempoChip.isMouseButtonDown() && ! tempoChip.entryLabel().isBeingEdited())
             tempoChip.setValue (t.bpm, juce::dontSendNotification);
         // BARS: how many loop, following the project; otherwise, dimmed, how
         // many the whole sample spans.
-        if (! barsChip.isMouseButtonDown() && ! barsChip.entryLabel().isBeingEdited() && shownLength > 0.0)
-            barsChip.setValue (t.matchProject ? (double) t.loopBarsFor (shownLength) : t.barsIn (shownLength),
+        if (! barsChip.isMouseButtonDown() && ! barsChip.entryLabel().isBeingEdited() && shown.length > 0.0)
+            barsChip.setValue (t.matchProject ? (double) t.loopBarsFor (shown.length) : t.barsIn (shown.length),
                                juce::dontSendNotification);
         barsChip.setEnabled (t.matchProject);
         barsChip.setAlpha (t.matchProject ? 1.0f : 0.35f);
@@ -744,8 +746,8 @@ private:
 
     juce::String statusText() const
     {
-        auto& riser = processor.getRiser();
-        if (shownLength <= 0.0)
+        const auto& riser = processor.getRiser();
+        if (shown.length <= 0.0)
             return {};   // the source pill already says NOISE
         if (! riser.getTiming().matchProject)
             return "OWN TEMPO";
@@ -756,19 +758,19 @@ private:
     void updateSourcePill()
     {
         // The sample's name, shortened to fit; lit while a sample is in use.
-        const auto label = shownName.isEmpty() ? juce::String ("NOISE")
-                                               : juce::File::createFileWithoutCheckingPath (shownName).getFileNameWithoutExtension().toUpperCase();
-        sourcePill.setToggleState (shownName.isNotEmpty(), juce::dontSendNotification);
+        const auto label = shown.name.isEmpty() ? juce::String ("NOISE")
+                                               : juce::File::createFileWithoutCheckingPath (shown.name).getFileNameWithoutExtension().toUpperCase();
+        sourcePill.setToggleState (shown.name.isNotEmpty(), juce::dontSendNotification);
         sourcePill.setButtonText (PreDropLookAndFeel::fitPillLabel (label, true, (float) sourcePill.getWidth(),
                                                                     PreDropLookAndFeel::pillScale (true, (float) sourcePill.getHeight())));
-        sourcePill.setTooltip (shownName.isEmpty() ? "Built-in noise riser. Click to load a sample." : "Riser sample: " + shownName + ". Click to change it.");
+        sourcePill.setTooltip (shown.name.isEmpty() ? "Built-in noise riser. Click to load a sample." : "Riser sample: " + shown.name + ". Click to change it.");
     }
 
     void showSourceMenu()
     {
         juce::PopupMenu menu;
         menu.addItem (1, "Load riser sample...");
-        menu.addItem (2, "Use built-in noise", shownName.isNotEmpty());
+        menu.addItem (2, "Use built-in noise", shown.name.isNotEmpty());
 
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sourcePill),
                             [safe = juce::Component::SafePointer (this)] (int choice)
@@ -834,14 +836,27 @@ private:
     std::vector<std::unique_ptr<SettingKnob>> noiseKnobs;   // START, END, RESONANCE
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> statusArea;
-    juce::Rectangle<int> noteArea;
-    juce::String shownName;
-    juce::String shownStatus;
-    double       shownLength = 0.0;
-    int          shownId     = -1;   // forces the first refresh to read the sample
-    bool         updating    = false;
-    float        uiScale     = 1.0f;
+    // Where the header's status and the noise's note are drawn.
+    struct Areas
+    {
+        juce::Rectangle<int> status;
+        juce::Rectangle<int> note;
+    };
+    Areas areas;
+
+    // The sample (and status) on show, to redraw only on a change.
+    struct Shown
+    {
+        juce::String name;
+        juce::String status;
+        double       length = 0.0;
+        int          id     = -1;   // forces the first refresh to read the sample
+    };
+    Shown shown;
+
+    bool  updating = false;
+    float uiScale  = 1.0f;
+    std::function<void()> onBack;   // the BACK button
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RiserView)
 };
