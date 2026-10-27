@@ -749,6 +749,28 @@ void testRiserFollowsProject()
         finite = finite && std::isfinite (buffer.getSample (0, n));
     check (finite, "and plays on");
 
+    // A bounce starting while a timing change is still rendering in the
+    // background renders it there and then. Here: from following the project
+    // like tape (150 over 120, 1.25x) to its own speed (1x).
+    p.setNonRealtime (true);
+    setParam (p, "amount", 0.0f);
+    for (int b = 0; b < 10; ++b)
+        p.processBlock (buffer, midi);   // the riser stops, back to the top
+    auto t = p.getRiser().getTiming();
+    t.keepPitch = false;
+    p.getRiser().setTiming (t);
+    p.processBlock (buffer, midi);
+    t.matchProject = false;
+    p.getRiser().setTiming (t);          // queued in the background
+    setParam (p, "amount", 1.0f);
+    for (int b = 0; b < 10; ++b)
+        p.processBlock (buffer, midi);
+    const float ownSpeed = 5120.0f / (4.0f * 48000.0f);
+    check (p.getRiserPlayhead() > 0.9f * ownSpeed && p.getRiserPlayhead() < 1.1f * ownSpeed,
+           "a bounce plays the newest timing, not one still rendering");
+    p.setNonRealtime (false);
+    p.getRiser().waitForRender (10000);
+
     p.setPlayHead (nullptr);
     file.deleteFile();
 }

@@ -225,8 +225,10 @@ void RiserSource::update()
 void RiserSource::renderIfStale()
 {
     {
+        // Stale too while a background rendering (for a new tempo or timing)
+        // hasn't reached the engine yet: a bounce can't wait for it.
         const juce::ScopedLock sl (lock);
-        if (! needsRender())
+        if (! needsRender() && published.load() == generation.load())
             return;
     }
     renderNow();
@@ -281,7 +283,10 @@ void RiserSource::publish (std::unique_ptr<RiserSample> sample, int forGeneratio
     // Only the newest rendering reaches the engine, and one at a time.
     const juce::ScopedLock sl (publishLock);
     if (forGeneration == generation.load())
+    {
         engine.setRiserSample (sample != nullptr ? std::move (sample) : RiserSample::none());
+        published = forGeneration;
+    }
 }
 
 std::unique_ptr<RiserSample> RiserSource::render (const Request& r)

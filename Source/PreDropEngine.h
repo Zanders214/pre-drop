@@ -560,8 +560,9 @@ private:
 
         if (riser.armed)
         {
-            // The build-up starts: the sample starts on the host's next bar line.
-            const auto start = nextBarStart (n);
+            // The build-up starts: a sample that follows the project starts on
+            // the host's next bar line; one at its own speed starts now.
+            const auto start = sample.tempo > 0.0 ? nextBarStart (n) : BarStart {};
             riser.armed     = false;
             riser.wait      = start.wait;
             riser.samplePos = std::fmod (start.pastSeconds * sr * rate, (double) sample.length());

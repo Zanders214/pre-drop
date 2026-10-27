@@ -87,8 +87,9 @@ public:
         from the one the sample was stretched to. Message thread, regularly. */
     void update();
 
-    /** Re-renders right away if the tempo moved: for offline rendering (a
-        bounce), where waiting would leave the start out of time. */
+    /** Re-renders right away if the tempo moved, or a background rendering
+        is still on its way: for offline rendering (a bounce), where waiting
+        would leave the start out of time. */
     void renderIfStale();
 
     /** Waits for a background re-render to finish. For tests. */
@@ -156,10 +157,11 @@ private:
     Loaded loaded;
     int    nextId = 1;
 
-    // The newest rendering asked for (later ones replace earlier ones), and
-    // the project tempo it was for.
+    // The newest rendering asked for (later ones replace earlier ones), the
+    // project tempo it was for, and the newest one the engine has.
     juce::CriticalSection publishLock;
     std::atomic<int>      generation { 0 };
+    std::atomic<int>      published  { 0 };
     double                requestedTempo = 0.0;
 
     juce::ThreadPool renderer { juce::ThreadPoolOptions{}.withNumberOfThreads (1).withThreadName ("PreDrop riser") };

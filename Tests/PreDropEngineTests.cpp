@@ -490,6 +490,18 @@ void testRiserSample()
         const float freeHead = engine.getRiserPlayhead();
         check (freeHead > 0.95f * block / loop && freeHead < 1.1f * block / loop,   // its loop is a little shorter (crossfaded)
                "a sample at its own tempo ignores the project's");
+
+        // ... and its bars: mid-bar in a playing project it starts at once, from the top.
+        PreDropEngine midBarEngine;
+        midBarEngine.setRiserDepth (1.0f);
+        midBarEngine.setAmount (1.0f);
+        midBarEngine.setRiserSample (RiserSample::create (noiseSample (1, (int) loop, 9), sr, sr, "free"));
+        midBarEngine.prepare (sr, 1, block);
+        midBarEngine.setTransport ({ true, 120.0, 2.0, 0.0, 4.0 });
+        auto midBarBuffer = makeSine (sr, 220.0, block, 1);
+        midBarEngine.process (midBarBuffer);
+        check (approx (midBarEngine.getRiserPlayhead(), freeHead, 1.0e-6f),
+               "a sample at its own tempo starts at once, not on the next bar");
         engine.setAmount (0.0f);
         engine.reset();
         check (engine.getRiserPlayhead() < 0.0f, "a reset clears the playhead");
