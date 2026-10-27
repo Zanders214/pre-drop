@@ -508,9 +508,9 @@ private:
         const bool hpfWanted = ! settledAtOff (sm.hpfCutoff, minHpfCutoffHz);
         sm.hpfBlend.setTargetValue (hpfWanted ? 1.0f : 0.0f);
         return {
-            runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); }),
-            runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); }),
-            runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); }),
+            runOrIdle (idle.hpf,    ! hpfWanted && settledAtOff (sm.hpfBlend, 0.0f), [this] { hpf.reset(); hpf2.reset(); }),
+            runOrIdle (idle.reverb, settledAtOff (sm.reverbWet, 0.0f),           [this] { reverb.reset(); preDelay.line.reset(); }),
+            runOrIdle (idle.delay,  settledAtOff (sm.delayWet, 0.0f),            [this] { delayLine.reset(); tone.state = {}; }),
             runOrIdle (idle.riser,  settledAtOff (sm.riserLevel, 0.0f),          [this] { riser.filter.reset(); riser.samplePos = 0.0; riser.armed = true; })
         };
     }

@@ -572,6 +572,35 @@ void testIdleEffectsPassThrough()
     engine.setRiserDepth (0.0f);
     runBlocks (10, 1.0f);
     check (runBlocks (20, 1.0f).first == 0.0f, "with every depth at 0 the output is bit-identical at full Amount");
+
+    // Going idle forgets what passed: a reverb with PRE-DELAY, a 24 dB
+    // high-pass and a toned delay, brought back on silence, stay silent.
+    PreDropEngine fresh;
+    EffectSettings settings;
+    settings.set (EffectSettings::reverbPreDelay, 200.0f);
+    settings.set (EffectSettings::hpfSlope, 1.0f);
+    settings.set (EffectSettings::delayTone, 2000.0f);
+    fresh.setEffectSettings (settings);
+    fresh.setRiserDepth (0.0f);
+    fresh.setWetOnly (true);
+    fresh.prepare (sr, 2, block);
+    const auto run = [&] (int count, float amount, bool loud)
+    {
+        fresh.setAmount (amount);
+        float peak = 0.0f;
+        for (int b = 0; b < count; ++b)
+        {
+            auto buffer = makeSine (sr, 110.0, block);
+            if (! loud)
+                buffer.clear();
+            fresh.process (buffer);
+            peak = std::max (peak, buffer.getMagnitude (0, block));
+        }
+        return peak;
+    };
+    run (100, 1.0f, true);
+    run (100, 0.0f, true);   // idle, with the sound still coming in
+    check (run (100, 1.0f, false) < 1.0e-6f, "a build-up after idling starts from silence (nothing held in the pre-delay)");
 }
 
 // ---- Test 3f: the high-pass fades in and out of idle without a click. --------
