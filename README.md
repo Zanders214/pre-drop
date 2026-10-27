@@ -90,6 +90,18 @@ the role and the track levels as they are. Presets are `.predrop` files in
 anywhere, to share it; importing one loads it and keeps a copy in the folder. The
 name of the preset in use is saved with your set.
 
+PreDrop comes with six presets, written into the folder the first time you open the
+menu (delete any you don't want; they won't come back):
+
+| Preset | What it does |
+|--------|--------------|
+| **Big Room Lift** | A big, bright room and quarter-note echoes over a wide noise sweep: the all-round festival build. |
+| **Tight Club Riser** | A steep, slightly resonant high-pass, a short room and ping-pong 1/8 echoes, with a brighter, whistling riser. |
+| **Dub Throw** | Long, dark ping-pong 1/4D echoes that pile up, a damped room and only a hint of riser. |
+| **Resonant Sweep** | The high-pass climbs steep and resonant to 2.4 kHz, with a narrow, whistling riser and short 1/16 echoes. |
+| **Ambient Swell** | A huge, open room with pre-delay, slow half-note echoes and a low, wide riser; Mix at 90%. |
+| **Subtle Tension** | Everything gentle: a smaller room, soft 1/8 echoes, a quiet riser and a light high-pass. |
+
 ## Choosing which tracks get which effects
 
 Put PreDrop on your **master**: it's the **MAIN**, and on its own it works on the whole

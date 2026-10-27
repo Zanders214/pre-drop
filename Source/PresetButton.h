@@ -178,6 +178,7 @@ public:
         checked without a screen). Re-reads the presets folder. */
     juce::PopupMenu buildMenu()
     {
+        presets.installFactoryPresets();   // the first time only
         listed = presets.getPresets();
 
         juce::PopupMenu menu;

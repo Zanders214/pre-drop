@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <utility>
+#include <vector>
 
 class PreDropAudioProcessor;
 
@@ -16,6 +18,8 @@ class PreDropAudioProcessor;
     elsewhere the user's app-data folder), listed by name. Any .predrop file can
     also be exported anywhere and imported back (which copies it into the
     folder). The name of the last one saved or loaded is kept with the project.
+    PreDrop's own presets (factoryPresets) are written into the folder the
+    first time the preset menu opens.
 
     Loading and saving are for the message thread (they may load plug-ins).
 */
@@ -65,6 +69,23 @@ public:
 
     /** The file a preset of this name is saved as. */
     juce::File fileFor (const juce::String& name) const;
+
+    /** The presets PreDrop comes with: a name and the settings that differ
+        from the defaults (by parameter ID). */
+    struct Factory
+    {
+        const char* name;
+        std::vector<std::pair<const char*, float>> values;
+    };
+    static const std::vector<Factory>& factoryPresets();
+
+    /** A factory preset as a preset. */
+    static juce::ValueTree makePreset (const Factory& factory);
+
+    /** Writes the factory presets into the folder, once: after that, one that
+        was deleted stays deleted, and a preset of the same name is never
+        replaced. Returns how many were written. */
+    int installFactoryPresets();
 
 private:
     static juce::String write (const juce::ValueTree& preset, const juce::File& file);

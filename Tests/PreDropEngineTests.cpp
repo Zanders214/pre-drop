@@ -1082,6 +1082,50 @@ void testEffectSettingsSound()
     const float gentleLevel = belowCutoff (S {}), steepLevel = belowCutoff (steep);
     check (steepLevel < 0.1f * gentleLevel, "a 24 dB slope cuts two octaves below the cutoff far harder than 12 dB");
     check (std::isfinite (belowCutoff (resonant)), "a resonant high-pass stays stable");
+
+    // Resonance colours the sweep without jumping out: on pink noise, full
+    // resonance at either slope stays within a few dB of no resonance.
+    const auto pinkThroughHpf = [&] (const S& settings)
+    {
+        PreDropEngine engine;
+        engine.setHpfDepth (0.9f);
+        engine.setReverbDepth (0.0f);
+        engine.setDelayDepth (0.0f);
+        engine.setRiserDepth (0.0f);
+        engine.setAmount (1.0f);
+        engine.setEffectSettings (settings);
+        engine.prepare (sr, 2, block);
+        juce::Random random (5);
+        double b0 = 0.0, b1 = 0.0, b2 = 0.0, out = 0.0;
+        for (int b = 0; b < 300; ++b)
+        {
+            juce::AudioBuffer<float> buffer (2, block);
+            for (int n = 0; n < block; ++n)
+            {
+                const double white = random.nextDouble() * 2.0 - 1.0;
+                b0 = 0.99765 * b0 + white * 0.0990460;
+                b1 = 0.96300 * b1 + white * 0.2965164;
+                b2 = 0.57000 * b2 + white * 1.0526913;
+                const auto x = (float) (0.1 * (b0 + b1 + b2 + white * 0.1848));
+                buffer.setSample (0, n, x);
+                buffer.setSample (1, n, x);
+            }
+            engine.process (buffer);
+            if (b >= 100)
+                out += (double) buffer.getRMSLevel (0, 0, block) * buffer.getRMSLevel (0, 0, block);
+        }
+        return 10.0 * std::log10 (out);
+    };
+    for (const bool steepSlope : { false, true })
+    {
+        S flat, peaked;
+        flat.set (S::hpfSlope, steepSlope ? 1.0f : 0.0f);
+        peaked = flat;
+        peaked.set (S::hpfResonance, 1.0f);
+        const double lift = pinkThroughHpf (peaked) - pinkThroughHpf (flat);
+        check (lift > 1.0 && lift < 9.0, std::string ("full resonance at ") + (steepSlope ? "24" : "12")
+                                           + " dB lifts the level only a little (" + std::to_string (lift) + " dB)");
+    }
 }
 
 } // namespace

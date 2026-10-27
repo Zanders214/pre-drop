@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -1826,17 +1827,24 @@ void testPresets()
     if (pill != nullptr)
     {
         check (pill->getButtonText().startsWith ("SHARED"), "it shows the preset's name (" + pill->getButtonText().toStdString() + ")");
-        const auto menu = pill->buildMenu();
-        std::vector<std::pair<int, bool>> items;
+        const auto menu = pill->buildMenu();   // installs PreDrop's own presets too
+        std::vector<std::tuple<int, juce::String, bool>> items;   // id, text, ticked
         for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
-            items.emplace_back (it.getItem().itemID, it.getItem().isTicked);
-        const auto has = [&items] (int id, bool ticked) { return std::find (items.begin(), items.end(), std::pair { id, ticked }) != items.end(); };
-        check (has (PresetButton::firstPresetId, true) && has (PresetButton::firstPresetId + 1, false)
-                 && has (PresetButton::saveId, false) && has (PresetButton::exportId, false) && has (PresetButton::importId, false)
-                 && has (PresetButton::folderId, false),
-               "its menu lists the presets (ticking this one) with save, export, import and the folder");
+            items.emplace_back (it.getItem().itemID, it.getItem().text, it.getItem().isTicked);
+        const auto idOf = [&items] (const juce::String& text, bool ticked)
+        {
+            for (const auto& [id, itemText, itemTicked] : items)
+                if (itemText == text && itemTicked == ticked)
+                    return id;
+            return 0;
+        };
+        check (idOf ("Shared Wash", true) >= PresetButton::firstPresetId && idOf ("Shared Wash (2)", false) > 0
+                 && idOf ("Dub Throw", false) > 0
+                 && idOf ("Save preset...", false) == PresetButton::saveId && idOf ("Export...", false) == PresetButton::exportId
+                 && idOf ("Import...", false) == PresetButton::importId && idOf ("Show presets folder", false) == PresetButton::folderId,
+               "its menu lists the presets (ticking this one, PreDrop's own among them) with save, export, import and the folder");
 
-        pill->choose (PresetButton::firstPresetId + 1);
+        pill->choose (idOf ("Shared Wash (2)", false));
         check (presets.getCurrentName() == "Shared Wash (2)" && pill->getButtonText().startsWith ("SHARED"), "picking one loads it");
 
         pill->saveAs ("From The Pill");
@@ -1873,6 +1881,85 @@ void testPresets()
     editor.reset();
     root.deleteRecursively();
 }
+void testFactoryPresets()
+{
+    std::printf ("Factory presets:\n");
+
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-factory-tests");
+    folder.deleteRecursively();
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    auto& presets = p.getPresets();
+    presets.setFolder (folder);
+
+    const auto& factory = PresetManager::factoryPresets();
+    bool valid = factory.size() >= 5;
+    for (const auto& preset : factory)
+        for (const auto& [id, value] : preset.values)
+        {
+            auto* parameter = p.getState().getParameter (id);
+            const bool ok = parameter != nullptr && PresetManager::isSoundParameter (id)
+                            && std::abs (parameter->convertFrom0to1 (parameter->convertTo0to1 (value)) - value) <= 1.0e-3f * std::max (1.0f, std::abs (value));
+            if (! ok)
+                std::printf ("    %s: %s = %g\n", preset.name, id, (double) value);
+            valid = valid && ok;
+        }
+    check (valid, "PreDrop comes with " + std::to_string (factory.size()) + " presets, each setting a sound parameter within its range");
+
+    // A user's own preset of a factory name is never replaced.
+    folder.createDirectory();
+    folder.getChildFile ("Dub Throw.predrop").replaceWithText ("mine");
+    check (presets.installFactoryPresets() == (int) factory.size() - 1 && presets.getPresets().size() == (int) factory.size()
+             && folder.getChildFile ("Dub Throw.predrop").loadFileAsString() == "mine",
+           "they're written into the folder, leaving a preset of the same name alone");
+
+    // Once only: one deleted stays deleted.
+    presets.fileFor ("Ambient Swell").deleteFile();
+    check (presets.installFactoryPresets() == 0 && ! presets.fileFor ("Ambient Swell").existsAsFile(), "they're written once: a deleted one stays deleted");
+
+    // Each loads, and builds up without running away: at full Amount on
+    // pink noise the output stays within a few dB of the input.
+    juce::Random random (7);
+    for (const auto& preset : factory)
+    {
+        const auto file = folder.getChildFile ("check.predrop");
+        file.replaceWithText (PresetManager::makePreset (preset).toXmlString());
+        const bool loaded = presets.load (file).isEmpty();
+        setParam (p, "amount", 1.0f);
+
+        double in = 0.0, out = 0.0, b0 = 0.0, b1 = 0.0, b2 = 0.0;
+        bool finite = true;
+        juce::MidiBuffer midi;
+        for (int block = 0; block < 400; ++block)
+        {
+            juce::AudioBuffer<float> buffer (2, 512);
+            for (int n = 0; n < 512; ++n)
+            {
+                const double white = random.nextDouble() * 2.0 - 1.0;
+                b0 = 0.99765 * b0 + white * 0.0990460;
+                b1 = 0.96300 * b1 + white * 0.2965164;
+                b2 = 0.57000 * b2 + white * 1.0526913;
+                const auto x = (float) (0.1 * (b0 + b1 + b2 + white * 0.1848));
+                buffer.setSample (0, n, x);
+                buffer.setSample (1, n, x);
+            }
+            const double blockIn = buffer.getRMSLevel (0, 0, 512);
+            p.processBlock (buffer, midi);
+            finite = finite && std::isfinite (buffer.getRMSLevel (0, 0, 512));
+            if (block >= 200)
+            {
+                in  += blockIn * blockIn;
+                out += (double) buffer.getRMSLevel (0, 0, 512) * buffer.getRMSLevel (0, 0, 512);
+            }
+        }
+        const double db = 10.0 * std::log10 (out / in);
+        check (loaded && finite && db > -12.0 && db < 6.0,
+               std::string (preset.name) + " loads and peaks at a sensible level (" + std::to_string (db) + " dB)");
+        setParam (p, "amount", 0.0f);
+        p.reset();
+    }
+    folder.deleteRecursively();
+}
 } // namespace
 
 int main()
@@ -1896,6 +1983,7 @@ int main()
     testRiserView();
     testEffectViews();
     testPresets();
+    testFactoryPresets();
     testLinkHub();
     testLinkedProcessing();
     testLinkingEditors();

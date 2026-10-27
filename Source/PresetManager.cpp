@@ -160,6 +160,82 @@ juce::String PresetManager::importFrom (const juce::File& file)
     return {};
 }
 
+// --- Factory presets -------------------------------------------------------------
+// Each lists only what differs from the defaults (every depth 50%, Mix 100%,
+// Output 0 dB, a 95% room, a synced 1/8D delay at 60% feedback, a 12 dB
+// high-pass, the noise riser sweeping 200 Hz to 8 kHz). The riser is the
+// built-in noise in each.
+
+const std::vector<PresetManager::Factory>& PresetManager::factoryPresets()
+{
+    static const std::vector<Factory> presets {
+        { "Big Room Lift", {
+            { "reverbDepth", 0.7f }, { "reverbSize", 1.0f }, { "reverbDamping", 0.3f }, { "reverbPreDelay", 30.0f },
+            { "delayDepth", 0.35f }, { "delayNote", 8.0f }, { "delayFeedback", 0.45f }, { "delayTone", 6000.0f },
+            { "riserDepth", 0.55f }, { "riserStart", 150.0f }, { "riserEnd", 10000.0f },
+            { "hpfDepth", 0.55f }, { "outputTrim", -1.5f } } },
+
+        { "Tight Club Riser", {
+            { "hpfDepth", 0.75f }, { "hpfSlope", 1.0f }, { "hpfResonance", 0.3f },
+            { "reverbDepth", 0.35f }, { "reverbSize", 0.6f }, { "reverbDamping", 0.6f },
+            { "delayDepth", 0.45f }, { "delayNote", 5.0f }, { "delayFeedback", 0.45f }, { "delayTone", 8000.0f }, { "delayPingPong", 1.0f },
+            { "riserDepth", 0.7f }, { "riserStart", 300.0f }, { "riserEnd", 12000.0f }, { "riserResonance", 0.5f } } },
+
+        { "Dub Throw", {
+            { "delayDepth", 0.85f }, { "delayNote", 9.0f }, { "delayFeedback", 0.8f }, { "delayTone", 2000.0f }, { "delayPingPong", 1.0f },
+            { "reverbDepth", 0.3f }, { "reverbSize", 0.8f }, { "reverbDamping", 0.7f },
+            { "riserDepth", 0.2f }, { "hpfDepth", 0.4f }, { "hpfResonance", 0.2f }, { "outputTrim", -2.0f } } },
+
+        { "Resonant Sweep", {
+            { "hpfDepth", 0.9f }, { "hpfSlope", 1.0f }, { "hpfResonance", 0.7f },
+            { "reverbDepth", 0.25f }, { "reverbSize", 0.7f },
+            { "delayDepth", 0.25f }, { "delayNote", 2.0f }, { "delayFeedback", 0.35f },
+            { "riserDepth", 0.45f }, { "riserStart", 400.0f }, { "riserEnd", 14000.0f }, { "riserResonance", 0.85f } } },
+
+        { "Ambient Swell", {
+            { "reverbDepth", 0.9f }, { "reverbSize", 1.0f }, { "reverbDamping", 0.2f }, { "reverbPreDelay", 80.0f },
+            { "delayDepth", 0.4f }, { "delayNote", 10.0f }, { "delayFeedback", 0.7f }, { "delayTone", 3000.0f },
+            { "riserDepth", 0.6f }, { "riserStart", 80.0f }, { "riserEnd", 6000.0f }, { "riserResonance", 0.1f },
+            { "hpfDepth", 0.3f }, { "mix", 0.9f }, { "outputTrim", -2.5f } } },
+
+        { "Subtle Tension", {
+            { "reverbDepth", 0.3f }, { "reverbSize", 0.75f }, { "reverbWidth", 0.8f },
+            { "delayDepth", 0.25f }, { "delayNote", 5.0f }, { "delayFeedback", 0.4f }, { "delayTone", 5000.0f },
+            { "riserDepth", 0.3f }, { "riserEnd", 5000.0f },
+            { "hpfDepth", 0.35f } } },
+    };
+    return presets;
+}
+
+juce::ValueTree PresetManager::makePreset (const Factory& factory)
+{
+    juce::ValueTree preset (presetTag);
+    preset.setProperty ("version", formatVersion, nullptr);
+    for (const auto& [id, value] : factory.values)
+    {
+        juce::ValueTree parameter (parameterTag);
+        parameter.setProperty ("id", juce::String (id), nullptr);
+        parameter.setProperty ("value", value, nullptr);
+        preset.appendChild (parameter, nullptr);
+    }
+    return preset;
+}
+
+int PresetManager::installFactoryPresets()
+{
+    // A marker in the folder records that they've been written.
+    const auto marker = presetFolder.getChildFile (".factory-presets-1");
+    if (marker.existsAsFile() || presetFolder.createDirectory().failed())
+        return 0;
+
+    int written = 0;
+    for (const auto& factory : factoryPresets())
+        if (const auto file = fileFor (factory.name); ! file.existsAsFile() && write (makePreset (factory), file).isEmpty())
+            ++written;
+    marker.create();
+    return written;
+}
+
 juce::String PresetManager::write (const juce::ValueTree& preset, const juce::File& file)
 {
     const auto xml = preset.createXml();

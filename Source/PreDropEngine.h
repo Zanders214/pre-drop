@@ -435,11 +435,16 @@ private:
         const float q     = settings.hpfQ();
         if (steep != applied.hpfSteep || ! juce::exactlyEqual (q, applied.hpfQ))
         {
-            // 24 dB: two stages with a Butterworth pair of Qs, both scaled by
-            // the resonance (12 dB: the one stage at its Q).
-            const float scale = q * juce::MathConstants<float>::sqrt2;   // 1 with no resonance
-            hpf.setResonance  (steep ? 0.5411961f * scale : q);
-            hpf2.setResonance (steep ? 1.3065630f * scale : q);
+            // 24 dB: two stages with a Butterworth pair of Qs. The resonance
+            // lifts only the second (from 1.31 to the 12 dB slope's top Q), so
+            // the peak is no taller than at 12 dB; lifting both would stack
+            // their peaks (+19 dB on noise at full resonance).
+            const float top = EffectSettings::specs[EffectSettings::hpfResonance].max;
+            const float res = settings[EffectSettings::hpfResonance] / top;
+            constexpr float steepQ = 1.3065630f;
+            const float maxQ = 0.70710678f * 12.0f;   // EffectSettings::hpfQ() at full resonance
+            hpf.setResonance  (steep ? 0.5411961f : q);
+            hpf2.setResonance (steep ? steepQ * std::pow (maxQ / steepQ, res) : q);
             applied.hpfSteep = steep;
             applied.hpfQ     = q;
         }
