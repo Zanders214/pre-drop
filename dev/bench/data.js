@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793044508764,
+  "lastUpdate": 1793062041271,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -407,6 +407,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.399,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f51b2e328227055689a06d1e43f49425fe5a37c",
+          "message": "Merge pull request #16 from Zanders214/claude/plugin-slots\n\nUse your own VST3 as PreDrop's reverb or delay",
+          "timestamp": "2026-10-27T01:45:44+01:00",
+          "tree_id": "f5aea53bfa5239d6cc84f24c2aac2eca46542934",
+          "url": "https://github.com/Zanders214/pre-drop/commit/9f51b2e328227055689a06d1e43f49425fe5a37c"
+        },
+        "date": 1793062040565,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 42708.196,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.4,
             "unit": "%"
           }
         ]
