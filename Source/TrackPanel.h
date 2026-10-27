@@ -18,7 +18,8 @@
     The link status (following the main, or why not), the track's name as it
     appears in the main's list (double-click to rename), and this track's
     HIGH-PASS / REVERB / DELAY levels: its share of the main's depth for each
-    effect, the same levels the main's TRACKS panel edits. A RETURN has no row
+    effect, the same levels the main's TRACKS panel edits, with the reverb's and
+    delay's sources (built-in or a plug-in) under theirs. A RETURN has no row
     in that list (each track's send knob is its amount), so in return mode the
     name row explains the sends instead.
 */
@@ -163,23 +164,22 @@ public:
         nameCaption = nameRow.removeFromLeft (px (80.0f));
         name.setBounds (nameRow);
 
-        // Three columns, each a small knob with its label and level beside it,
-        // then the REV / DLY plug-in slots.
+        // Three columns, each a small knob with its label and level beside it
+        // and, for the reverb and delay, the effect's source underneath.
         area.removeFromTop (px (8.0f));
-        auto row = area.removeFromTop (px (36.0f));
-        area.removeFromTop (px (4.0f));
-        auto slotRow = area.removeFromTop (px (16.0f));
-        const int slotGap = px (8.0f);
-        reverbSlot.setBounds (slotRow.removeFromLeft ((slotRow.getWidth() - slotGap) / 2));
-        slotRow.removeFromLeft (slotGap);
-        delaySlot.setBounds (slotRow);
+        auto row = area.removeFromTop (px (36.0f) + px (4.0f) + px (14.0f));
         const int colW = row.getWidth() / 3;
+        const std::array<EffectSlotButton*, 3> sources { nullptr, &reverbSlot, &delaySlot };
         for (size_t i = 0; i < levels.size(); ++i)
         {
             auto col = row.removeFromLeft (colW);
-            levels[i].setBounds (col.removeFromLeft (px (36.0f)).withSizeKeepingCentre (px (36.0f), px (36.0f)));
-            col.removeFromLeft (px (5.0f));
-            levelText[i] = col.withSizeKeepingCentre (col.getWidth(), px (26.0f));
+            auto knobRow = col.removeFromTop (px (36.0f));
+            levels[i].setBounds (knobRow.removeFromLeft (px (36.0f)).withSizeKeepingCentre (px (36.0f), px (36.0f)));
+            knobRow.removeFromLeft (px (5.0f));
+            levelText[i] = knobRow.withSizeKeepingCentre (knobRow.getWidth(), px (26.0f));
+            col.removeFromTop (px (4.0f));
+            if (sources[i] != nullptr)
+                sources[i]->setBounds (col.removeFromTop (px (14.0f)).withTrimmedRight (px (8.0f)));
         }
     }
 

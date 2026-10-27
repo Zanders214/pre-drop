@@ -4,13 +4,14 @@
 #include <memory>
 
 #include "PluginProcessor.h"
+#include "PreDropLookAndFeel.h"
 #include "PreDropTheme.h"
 
 /**
     EffectSlotButton: picks what PreDrop uses as its reverb or its delay.
 
-    Shows "REV: BUILT-IN" (or DLY), or the loaded plug-in's name (lit),
-    shortened to fit. Clicking opens a menu:
+    A compact pill under its effect's knob: BUILT-IN, or the loaded plug-in's
+    name (lit), shortened to fit. Clicking opens a menu:
     the built-in effect, the VST3 plug-ins installed in the standard folders,
     a file browser for any other one, and the loaded plug-in's own window. It
     warns (amber, with a tooltip) when a saved plug-in isn't installed here, or
@@ -24,6 +25,7 @@ public:
     EffectSlotButton (PreDropAudioProcessor& p, Slot s, juce::LookAndFeel& pills) : processor (p), slot (s)
     {
         setLookAndFeel (&pills);
+        PreDropLookAndFeel::setCompactPill (*this);
         setPaintingIsUnclipped (true);   // the lit pill's glow reaches past it
         onClick = [this] { showMenu(); };
         refresh();
@@ -38,12 +40,12 @@ public:
         const auto missing = processor.getMissingEffectPluginName (slot);
         const bool leaks   = processor.effectPluginLeaksDry (slot);
 
+        // Warnings are short to fit the pill; the tooltip says the rest.
         juce::String label = name.isNotEmpty() ? name.toUpperCase() : juce::String ("BUILT-IN");
         if (missing.isNotEmpty())
-            label = "MISSING " + missing.toUpperCase();
+            label = "MISSING";
         else if (leaks)
-            label = "SET 100% WET";
-        label = (slot == Slot::reverb ? "REV: " : "DLY: ") + label;
+            label = "100% WET?";
 
         if (label == shownLabel)
             return;
@@ -132,30 +134,11 @@ public:
     }
 
 private:
-    // Shortens the label (with an ellipsis) until it fits the pill, measured in
-    // the pill's caption font at the pill's scale (designed 18 px tall).
+    // Shortens the label (with an ellipsis) until it fits the pill.
     void fitLabel()
     {
-        auto label = shownLabel;
-        if (getWidth() > 0)
-        {
-            const float s = (float) getHeight() / 18.0f;
-            const auto font = PreDrop::Fonts::sans (10.0f * s, true, 0.16f);
-            const float room = (float) getWidth() - 30.0f * s;   // dot, gap and padding
-            const auto width = [&font] (const juce::String& text)
-            {
-                juce::GlyphArrangement glyphs;
-                glyphs.addLineOfText (font, text, 0.0f, 0.0f);
-                return glyphs.getBoundingBox (0, -1, true).getWidth();
-            };
-            const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
-            for (auto kept = label; kept.isNotEmpty() && width (label) > room;)
-            {
-                kept = kept.dropLastCharacters (1);
-                label = kept + ellipsis;
-            }
-        }
-        setButtonText (label);
+        const float scale = PreDropLookAndFeel::pillScale (true, (float) getHeight());
+        setButtonText (PreDropLookAndFeel::fitPillLabel (shownLabel, true, (float) getWidth(), scale));
     }
 
     void showMenu()

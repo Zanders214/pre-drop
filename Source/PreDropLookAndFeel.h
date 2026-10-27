@@ -37,7 +37,22 @@ public:
     void drawButtonText (juce::Graphics&, juce::TextButton&,
                          bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
+    // Pills come in two sizes: the regular one (designed 18 px tall), and a
+    // compact one (14 px) for the source pills under the EFFECTS knobs. A
+    // button opts in with setCompactPill(); these give the caption font and
+    // the room the dot, gap and padding take, so labels can be fitted to it.
+    static void setCompactPill (juce::Button& b)              { b.getProperties().set (compactPillKey, true); }
+    static bool isCompactPill (const juce::Button& b)         { return b.getProperties()[compactPillKey]; }
+    static float pillScale (bool compact, float heightPx)     { return heightPx / (compact ? 14.0f : 18.0f); }
+    static juce::Font pillFont (bool compact, float scale);
+    static float pillChrome (bool compact, float scale)       { return (compact ? 15.0f : 30.0f) * scale; }
+
+    /** `label` shortened with an ellipsis until it fits a pill `widthPx` wide. */
+    static juce::String fitPillLabel (const juce::String& label, bool compact, float widthPx, float scale);
+
 private:
+    static constexpr const char* compactPillKey = "compactPill";
+
     void drawKnobReadout (juce::Graphics&, juce::Point<float> centre, float amount, float scale) const;
 
     float uiScale = 1.0f;

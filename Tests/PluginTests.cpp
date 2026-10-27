@@ -404,6 +404,24 @@ void testEditor()
     pumpMessages (60);
     check (button->getToggleState() && ! curve->isVisible(), "EFFECTS opens the depth panel in place of the curve");
 
+    // Under the REVERB, DELAY and RISER knobs: what each one uses (built-in or
+    // a plug-in; noise or a sample), shown only with the panel.
+    std::vector<juce::Component*> sources;
+    for (auto* pill : findChildren<EffectSlotButton> (*editor))
+        sources.push_back (pill);
+    for (auto* b : findChildren<juce::TextButton> (*editor))
+        if (b->getComponentID() == "riserSource")
+            sources.push_back (b);
+    bool underKnobs = sources.size() == 3;
+    for (size_t i = 0; underKnobs && i < sources.size(); ++i)
+    {
+        const auto pill = sources[i]->getBounds();
+        const auto dial = sliders[3 + i]->getBounds();
+        underKnobs = sources[i]->isVisible() && pill.getY() > dial.getBottom()
+                     && std::abs (pill.getCentreX() - dial.getCentreX()) <= 2;
+    }
+    check (underKnobs, "each effect's source sits under its own knob");
+
     setParam (p, "reverbDepth", 0.0f);
     setParam (p, "hpfDepth", 0.5f);
     pumpMessages (60);
@@ -412,6 +430,8 @@ void testEditor()
     button->triggerClick();
     pumpMessages (60);
     check (! button->getToggleState() && curve->isVisible(), "EFFECTS again restores the curve");
+    check (std::none_of (sources.begin(), sources.end(), [] (auto* c) { return c->isVisible(); }),
+           "the sources hide with the panel");
 
     // Resizing re-runs the proportional layout at double scale.
     editor->setSize (720, 1080);
@@ -513,14 +533,14 @@ void testRiserSampleEditor()
 
     juce::TextButton* riserButton = nullptr;
     for (auto* button : findChildren<juce::TextButton> (*editor))
-        if (button->getButtonText().startsWith ("RISER"))
+        if (button->getComponentID() == "riserSource")
             riserButton = button;
 
-    check (ed != nullptr && riserButton != nullptr, "the editor has a RISER button");
+    check (ed != nullptr && riserButton != nullptr, "the editor has a riser source pill");
     if (ed == nullptr || riserButton == nullptr)
         return;
 
-    check (riserButton->getButtonText() == "RISER: NOISE" && ! riserButton->getToggleState(),
+    check (riserButton->getButtonText() == "NOISE" && ! riserButton->getToggleState(),
            "it shows the built-in noise by default");
 
     check (ed->isInterestedInFileDrag ({ riserFile.getFullPathName() }), "dragging one audio file is accepted");
@@ -539,14 +559,14 @@ void testRiserSampleEditor()
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
     check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
     const auto label = riserButton->getButtonText();
-    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
+    check (label.startsWith ("PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
            "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 
     // (The button's menu is a native popup window, which can't be opened
     // headlessly; its "Use built-in noise" item calls clearRiserSample.)
     p.clearRiserSample();
-    check (pumpUntil ([&] { return riserButton->getButtonText() == "RISER: NOISE"; })
+    check (pumpUntil ([&] { return riserButton->getButtonText() == "NOISE"; })
              && ! riserButton->getToggleState(),
            "going back to noise resets the button");
 
@@ -968,8 +988,8 @@ void testEffectPlugins()
     {
         pills[0]->refresh();
         pills[1]->refresh();
-        check (pills[0]->getButtonText().startsWith ("REV: ") && pills[0]->getToggleState()
-                 && pills[1]->getButtonText() == "DLY: BUILT-IN",
+        check (pills[0]->getButtonText().startsWith ("ZAN") && pills[0]->getToggleState()
+                 && pills[1]->getButtonText() == "BUILT-IN",
                "they show the loaded plug-in and the built-in one (" + pills[0]->getButtonText().toStdString() + ")");
     }
     check (juce::File::isAbsolutePath (vst3.getFullPathName()) && ! PreDropAudioProcessor::findInstalledVst3Plugins().contains (vst3),
@@ -982,7 +1002,7 @@ void testEffectPlugins()
         check (p.getEffectPluginName (Slot::delay) == "ZandersPreDrop" && pills[1]->getToggleState(),
                "loading from the DLY pill puts the plug-in in the delay slot");
         pills[1]->choose (EffectSlotButton::builtInId);
-        check (p.getEffectPluginName (Slot::delay).isEmpty() && pills[1]->getButtonText() == "DLY: BUILT-IN",
+        check (p.getEffectPluginName (Slot::delay).isEmpty() && pills[1]->getButtonText() == "BUILT-IN",
                "choosing Built-in from the menu goes back to the built-in delay");
         pills[1]->choose (EffectSlotButton::firstPluginId + 9999);
         check (p.getEffectPluginName (Slot::delay).isEmpty(), "a stale menu choice does nothing");
@@ -1013,13 +1033,11 @@ void testEffectPlugins()
         check (pills[0]->getButtonText().contains ("100% WET"), "a dry-leaking plug-in's pill says to set it 100% wet");
 
         std::unique_ptr<juce::AudioProcessorEditor> elsewhereEditor (elsewhere.createEditor());
-        for (auto* child : elsewhereEditor->getChildren())
-            if (auto* pill = dynamic_cast<EffectSlotButton*> (child); pill != nullptr && pill->getButtonText().startsWith ("REV"))
-            {
-                pill->setBounds (0, 0, 400, 18);
-                pill->refresh();
-                check (pill->getButtonText().contains ("MISSING"), "a missing plug-in's pill says so");
-            }
+        if (auto* pill = findChild<EffectSlotButton> (*elsewhereEditor))   // the reverb's, added first
+        {
+            pill->refresh();
+            check (pill->getButtonText() == "MISSING", "a missing plug-in's pill says so");
+        }
     }
 }
 
