@@ -17,11 +17,13 @@
 #include "PluginEditor.h"
 #include "PreDropLookAndFeel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -402,6 +404,24 @@ void testEditor()
     pumpMessages (60);
     check (button->getToggleState() && ! curve->isVisible(), "EFFECTS opens the depth panel in place of the curve");
 
+    // Under the REVERB, DELAY and RISER knobs: what each one uses (built-in or
+    // a plug-in; noise or a sample), shown only with the panel.
+    std::vector<juce::Component*> sources;
+    for (auto* pill : findChildren<EffectSlotButton> (*editor))
+        sources.push_back (pill);
+    for (auto* b : findChildren<juce::TextButton> (*editor))
+        if (b->getComponentID() == "riserSource")
+            sources.push_back (b);
+    bool underKnobs = sources.size() == 3;
+    for (size_t i = 0; underKnobs && i < sources.size(); ++i)
+    {
+        const auto pill = sources[i]->getBounds();
+        const auto dial = sliders[3 + i]->getBounds();
+        underKnobs = sources[i]->isVisible() && pill.getY() > dial.getBottom()
+                     && std::abs (pill.getCentreX() - dial.getCentreX()) <= 2;
+    }
+    check (underKnobs, "each effect's source sits under its own knob");
+
     setParam (p, "reverbDepth", 0.0f);
     setParam (p, "hpfDepth", 0.5f);
     pumpMessages (60);
@@ -410,6 +430,8 @@ void testEditor()
     button->triggerClick();
     pumpMessages (60);
     check (! button->getToggleState() && curve->isVisible(), "EFFECTS again restores the curve");
+    check (std::none_of (sources.begin(), sources.end(), [] (auto* c) { return c->isVisible(); }),
+           "the sources hide with the panel");
 
     // Resizing re-runs the proportional layout at double scale.
     editor->setSize (720, 1080);
@@ -511,14 +533,14 @@ void testRiserSampleEditor()
 
     juce::TextButton* riserButton = nullptr;
     for (auto* button : findChildren<juce::TextButton> (*editor))
-        if (button->getButtonText().startsWith ("RISER"))
+        if (button->getComponentID() == "riserSource")
             riserButton = button;
 
-    check (ed != nullptr && riserButton != nullptr, "the editor has a RISER button");
+    check (ed != nullptr && riserButton != nullptr, "the editor has a riser source pill");
     if (ed == nullptr || riserButton == nullptr)
         return;
 
-    check (riserButton->getButtonText() == "RISER: NOISE" && ! riserButton->getToggleState(),
+    check (riserButton->getButtonText() == "NOISE" && ! riserButton->getToggleState(),
            "it shows the built-in noise by default");
 
     check (ed->isInterestedInFileDrag ({ riserFile.getFullPathName() }), "dragging one audio file is accepted");
@@ -537,14 +559,14 @@ void testRiserSampleEditor()
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
     check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
     const auto label = riserButton->getButtonText();
-    check (label.startsWith ("RISER: PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
+    check (label.startsWith ("PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
            "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
     check (riserButton->getToggleState(), "the button lights up while a sample is in use");
 
     // (The button's menu is a native popup window, which can't be opened
     // headlessly; its "Use built-in noise" item calls clearRiserSample.)
     p.clearRiserSample();
-    check (pumpUntil ([&] { return riserButton->getButtonText() == "RISER: NOISE"; })
+    check (pumpUntil ([&] { return riserButton->getButtonText() == "NOISE"; })
              && ! riserButton->getToggleState(),
            "going back to noise resets the button");
 
@@ -854,6 +876,268 @@ void testEmptyTrackList()
            "with nothing linked the panel says the whole mix is processed, and how to pick tracks");
 }
 
+// ---- Effect plug-ins: a VST3 as the reverb or delay ---------------------------
+// PreDrop's own VST3 build stands in for a third-party effect: at its default
+// Amount of 0 it passes audio through bit for bit, so as the "reverb" its wet
+// output is exactly the signal, which makes the expected result exact.
+
+// Largest |out - factor x in| over the last of `blocks` sine blocks.
+float deviationFrom (PreDropAudioProcessor& p, float factor, int blocks)
+{
+    juce::MidiBuffer midi;
+    float worst = 0.0f;
+    for (int b = 0; b < blocks; ++b)
+    {
+        juce::AudioBuffer<float> in (2, 512);
+        for (int ch = 0; ch < 2; ++ch)
+            for (int n = 0; n < 512; ++n)
+                in.setSample (ch, n, 0.5f * std::sin (0.05f * (float) (b * 512 + n)));
+        auto out = in;
+        p.processBlock (out, midi);
+        if (b == blocks - 1)
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < 512; ++n)
+                    worst = std::max (worst, std::abs (out.getSample (ch, n) - factor * in.getSample (ch, n)));
+    }
+    return worst;
+}
+
+void testEffectPlugins()
+{
+    std::printf ("Effect plug-ins:\n");
+    using Slot = PreDropAudioProcessor::EffectSlot;
+
+    const juce::File vst3 (PREDROP_TEST_VST3);
+    check (vst3.exists(), "PreDrop's own VST3 (the stand-in plug-in) has been built");
+    if (! vst3.exists())
+        return;
+
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    setParam (p, "amount", 1.0f);
+    for (auto* id : { "hpfDepth", "delayDepth", "riserDepth" })
+        setParam (p, id, 0.0f);
+
+    check (p.getEffectPluginName (Slot::reverb).isEmpty() && p.getEffectPluginName (Slot::delay).isEmpty(),
+           "reverb and delay start as the built-in effects");
+
+    const auto error = p.loadEffectPlugin (Slot::reverb, vst3);
+    check (error.isEmpty() && p.getEffectPluginName (Slot::reverb) == "ZandersPreDrop",
+           "a VST3 loads into the reverb slot (" + (error.isEmpty() ? juce::String ("ok") : error).toStdString() + ")");
+
+    const float deviation = deviationFrom (p, 1.5f, 40);
+    check (deviation < 1.0e-4f, "the plug-in comes in at the calibrated reverb level: dry + 0.5 x its output (off by "
+                                  + std::to_string (deviation) + ")");
+    check (p.effectPluginLeaksDry (Slot::reverb), "a plug-in passing its dry signal through is flagged (set it to 100% wet)");
+
+    // Saved with the set, plug-in settings included.
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    PreDropAudioProcessor reopened;
+    reopened.setStateInformation (state.getData(), (int) state.getSize());
+    check (reopened.getEffectPluginName (Slot::reverb) == "ZandersPreDrop" && reopened.getEffectPluginName (Slot::delay).isEmpty(),
+           "a reopened set has its plug-in back");
+
+    // On a computer without the plug-in: the built-in plays, and the plug-in's
+    // settings are kept, so saving there doesn't lose them.
+    auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+    auto* saved = xml != nullptr ? xml->getChildByName ("EFFECT_PLUGINS") : nullptr;
+    check (saved != nullptr, "the plug-in is saved in the state");
+    if (saved == nullptr)
+        return;
+    auto* slotXml = saved->getChildByName ("SLOT");
+    slotXml->setAttribute ("description", slotXml->getStringAttribute ("description")
+                                              .replace (vst3.getFullPathName(), "/nowhere/NotInstalled.vst3"));
+    juce::MemoryBlock elsewhereState;
+    juce::AudioProcessor::copyXmlToBinary (*xml, elsewhereState);
+    PreDropAudioProcessor elsewhere;
+    elsewhere.setStateInformation (elsewhereState.getData(), (int) elsewhereState.getSize());
+    check (elsewhere.getEffectPluginName (Slot::reverb).isEmpty() && elsewhere.getMissingEffectPluginName (Slot::reverb) == "ZandersPreDrop",
+           "a plug-in that isn't installed falls back to the built-in, named as missing");
+    juce::MemoryBlock resaved;
+    elsewhere.getStateInformation (resaved);
+    auto resavedXml = juce::AudioProcessor::getXmlFromBinary (resaved.getData(), (int) resaved.getSize());
+    check (resavedXml != nullptr && resavedXml->getChildByName ("EFFECT_PLUGINS") != nullptr,
+           "saving there keeps the missing plug-in and its settings");
+
+    // The delay slot works the same way, and either goes back to built-in.
+    check (p.loadEffectPlugin (Slot::delay, vst3).isEmpty() && p.getEffectPluginName (Slot::delay) == "ZandersPreDrop",
+           "a VST3 loads into the delay slot too");
+    p.useBuiltInEffect (Slot::reverb);
+    p.useBuiltInEffect (Slot::delay);
+    check (p.getEffectPluginName (Slot::reverb).isEmpty() && p.getEffectPluginName (Slot::delay).isEmpty(),
+           "both slots go back to the built-in effects");
+
+    const auto text = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-not-a-plugin.txt");
+    text.replaceWithText ("not a plug-in");
+    check (p.loadEffectPlugin (Slot::reverb, text).isNotEmpty() && p.getEffectPluginName (Slot::reverb).isEmpty(),
+           "a file that isn't a plug-in is refused, leaving the built-in");
+    check (p.loadEffectPlugin (Slot::reverb, juce::File ("/no/such/Plugin.vst3")).contains ("could not be found"),
+           "a missing file is refused");
+    text.deleteFile();
+
+    // The EFFECTS panel's slot pills show what is loaded.
+    p.loadEffectPlugin (Slot::reverb, vst3);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+    std::vector<EffectSlotButton*> pills;
+    for (auto* child : editor->getChildren())
+        if (auto* pill = dynamic_cast<EffectSlotButton*> (child))
+            pills.push_back (pill);
+    check (pills.size() == 2, "the EFFECTS panel has REV and DLY slot pills");
+    if (pills.size() == 2)
+    {
+        pills[0]->refresh();
+        pills[1]->refresh();
+        check (pills[0]->getButtonText().startsWith ("ZAN") && pills[0]->getToggleState()
+                 && pills[1]->getButtonText() == "BUILT-IN",
+               "they show the loaded plug-in and the built-in one (" + pills[0]->getButtonText().toStdString() + ")");
+    }
+    check (juce::File::isAbsolutePath (vst3.getFullPathName()) && ! PreDropAudioProcessor::findInstalledVst3Plugins().contains (vst3),
+           "PreDrop itself is left out of the plug-in list");
+
+    if (pills.size() == 2)
+    {
+        // Picking from the pill's menu (acted on directly; the menu is a native window).
+        pills[1]->loadPlugin (vst3, false);
+        check (p.getEffectPluginName (Slot::delay) == "ZandersPreDrop" && pills[1]->getToggleState(),
+               "loading from the DLY pill puts the plug-in in the delay slot");
+        pills[1]->choose (EffectSlotButton::builtInId);
+        check (p.getEffectPluginName (Slot::delay).isEmpty() && pills[1]->getButtonText() == "BUILT-IN",
+               "choosing Built-in from the menu goes back to the built-in delay");
+        pills[1]->choose (EffectSlotButton::firstPluginId + 9999);
+        check (p.getEffectPluginName (Slot::delay).isEmpty(), "a stale menu choice does nothing");
+
+        // The menu: Built-in ticked while nothing is loaded, plus a window item once one is.
+        const auto itemIds = [] (juce::PopupMenu menu)
+        {
+            std::vector<std::pair<int, bool>> ids;   // id, ticked
+            for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+                ids.emplace_back (it.getItem().itemID, it.getItem().isTicked);
+            return ids;
+        };
+        const auto has = [] (const std::vector<std::pair<int, bool>>& ids, int id, bool ticked)
+        {
+            return std::find (ids.begin(), ids.end(), std::pair { id, ticked }) != ids.end();
+        };
+        const auto builtInMenu = itemIds (pills[1]->buildMenu());
+        check (has (builtInMenu, EffectSlotButton::builtInId, true) && has (builtInMenu, EffectSlotButton::browseId, false)
+                 && ! has (builtInMenu, EffectSlotButton::windowId, false),
+               "the menu ticks Built-in and offers a file browser");
+        const auto loadedMenu = itemIds (pills[0]->buildMenu());
+        check (has (loadedMenu, EffectSlotButton::builtInId, false) && has (loadedMenu, EffectSlotButton::windowId, false),
+               "with a plug-in loaded it offers the plug-in's window");
+
+        // The warnings: a plug-in passing its dry signal, and one not installed here.
+        deviationFrom (p, 1.5f, 40);   // the stand-in passes everything: it leaks dry
+        pills[0]->refresh();
+        check (pills[0]->getButtonText().contains ("100% WET"), "a dry-leaking plug-in's pill says to set it 100% wet");
+
+        std::unique_ptr<juce::AudioProcessorEditor> elsewhereEditor (elsewhere.createEditor());
+        if (auto* pill = findChild<EffectSlotButton> (*elsewhereEditor))   // the reverb's, added first
+        {
+            pill->refresh();
+            check (pill->getButtonText() == "MISSING", "a missing plug-in's pill says so");
+        }
+    }
+}
+
+// A host playhead reporting a fixed tempo, to see it reach a hosted plug-in.
+struct FixedTempoPlayHead : juce::AudioPlayHead
+{
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo info;
+        info.setTimeInSamples (0);   // hosts always report it; VST3 requires it
+        info.setBpm (128.0);
+        info.setIsPlaying (true);
+        return info;
+    }
+};
+
+void testEffectPluginHostIntegration()
+{
+    std::printf ("Effect plug-ins and the host:\n");
+    using Slot = PreDropAudioProcessor::EffectSlot;
+    const juce::File vst3 (PREDROP_TEST_VST3);
+    if (! vst3.exists())
+        return;
+
+    // Tempo-synced effects need the host's tempo and transport: the playhead
+    // PreDrop gets from the host is handed to its plug-ins as it processes.
+    PreDropAudioProcessor p;
+    p.prepareToPlay (48000.0, 512);
+    p.loadEffectPlugin (Slot::delay, vst3);
+    FixedTempoPlayHead hostPlayHead;
+    p.setPlayHead (&hostPlayHead);
+    juce::AudioBuffer<float> buffer (2, 512);
+    buffer.clear();
+    juce::MidiBuffer midi;
+    p.processBlock (buffer, midi);
+    auto* hosted = p.getEffectPluginInstance (Slot::delay);
+    check (hosted != nullptr && hosted->getPlayHead() == &hostPlayHead,
+           "a hosted plug-in gets the host's playhead (tempo, position, transport)");
+    check (p.getEffectPluginInstance (Slot::reverb) == nullptr, "an empty slot has no plug-in instance");
+
+    // Hosts may restore a project on a worker thread. Plug-ins and their
+    // windows belong to the message thread, so the slot is restored there.
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    PreDropAudioProcessor restored;
+    std::thread worker ([&] { restored.setStateInformation (state.getData(), (int) state.getSize()); });
+    worker.join();
+    check (restored.getEffectPluginName (Slot::delay).isEmpty(),
+           "restoring on a worker thread doesn't create the plug-in there");
+    check (pumpUntil ([&] { return restored.getEffectPluginName (Slot::delay) == "ZandersPreDrop"; }),
+           "the message thread loads it right after");
+}
+
+void testHostedEffectEdges()
+{
+    std::printf ("Hosted effect edge cases:\n");
+    const juce::File vst3 (PREDROP_TEST_VST3);
+    if (! vst3.exists())
+        return;
+
+    juce::AudioPluginFormatManager formats;
+    formats.addFormat (new juce::VST3PluginFormat());
+    juce::OwnedArray<juce::PluginDescription> types;
+    formats.getFormat (0)->findAllTypesForFile (types, vst3.getFullPathName());
+    juce::String error;
+    auto instance = types.isEmpty() ? nullptr : formats.createPluginInstance (*types[0], 48000.0, 256, error);
+    check (instance != nullptr, "the stand-in plug-in opens");
+    if (instance == nullptr)
+        return;
+
+    HostedEffect fx (std::move (instance), *types[0]);
+    fx.prepare (48000.0, 256);
+
+    // A mono send: both of the plug-in's inputs get it, and the output comes back mono.
+    std::vector<float> mono (256);
+    for (size_t n = 0; n < mono.size(); ++n)
+        mono[n] = 0.5f * std::sin (0.05f * (float) n);
+    const auto original = mono;
+    float* channel = mono.data();
+    fx.process (&channel, 1, 256);
+    check (mono == original, "a mono send comes back through a stereo plug-in");
+
+    // A block longer than it was prepared for is silenced rather than overrun.
+    std::vector<float> longer (512, 0.25f);
+    float* longChannel = longer.data();
+    fx.process (&longChannel, 1, 512);
+    check (std::all_of (longer.begin(), longer.end(), [] (float v) { return v == 0.0f; }),
+           "an oversized block is silenced, not overrun");
+
+    // Silence in gives nothing to judge the dry leak by, so it doesn't move.
+    std::vector<float> silence (256, 0.0f);
+    float* silent = silence.data();
+    const float leakBefore = fx.dryLeak();
+    fx.process (&silent, 1, 256);
+    check (juce::exactlyEqual (fx.dryLeak(), leakBefore), "silence leaves the dry-leak measure alone");
+
+    HostedEffect none;
+    check (none.isEmpty() && none.getPlugin() == nullptr, "an empty slot is the built-in marker");
+}
+
 void testUnboundIndicators()
 {
     std::printf ("Indicators without a data source:\n");
@@ -921,6 +1205,9 @@ int main()
     testLinkedProcessing();
     testLinkingEditors();
     testReturnRole();
+    testEffectPlugins();
+    testHostedEffectEdges();
+    testEffectPluginHostIntegration();
     testEmptyTrackList();
     testUnboundIndicators();
     testButtonStates();

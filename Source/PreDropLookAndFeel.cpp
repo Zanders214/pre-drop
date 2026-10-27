@@ -256,23 +256,52 @@ void PreDropLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
     }
 }
 
+juce::Font PreDropLookAndFeel::pillFont (bool compact, float scale)
+{
+    return compact ? Fonts::sans (8.5f * scale, true, 0.05f)
+                   : Fonts::sans (10.0f * scale, true, 0.16f);   // bold, --tracking-cap
+}
+
+juce::String PreDropLookAndFeel::fitPillLabel (const juce::String& label, bool compact, float widthPx, float scale)
+{
+    if (widthPx <= 0.0f)
+        return label;   // not laid out yet
+
+    const auto font = pillFont (compact, scale);
+    const float room = widthPx - pillChrome (compact, scale);
+    // From the code point: a "\u2026" literal isn't UTF-8 under MSVC's default code page.
+    const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
+
+    auto fitted = label;
+    for (auto kept = label; kept.isNotEmpty() && textWidth (font, fitted) > room;)
+    {
+        kept = kept.dropLastCharacters (1);
+        fitted = kept + ellipsis;
+    }
+    return fitted;
+}
+
 void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button,
                                          bool, bool)
 {
     // GlowButton language: a small square status dot + caption, centred together.
-    const float s    = uiScale;
-    const bool  on   = button.getToggleState();
-    const auto  area = button.getLocalBounds().toFloat();
+    const float s       = uiScale;
+    const bool  on      = button.getToggleState();
+    const bool  compact = isCompactPill (button);
+    const auto  area    = button.getLocalBounds().toFloat();
 
-    const auto  font = Fonts::sans (10.0f * s, true, 0.16f);   // bold, --tracking-cap
+    const auto  font = pillFont (compact, s);
     const juce::String text = button.getButtonText();
     const float tw   = textWidth (font, text);
-    const float dot  = 6.0f * s;
-    const float gap  = 6.0f * s;
+    const float dot  = (compact ? 4.5f : 6.0f) * s;
+    const float gap  = (compact ? 4.0f : 6.0f) * s;
     const float xL   = area.getCentreX() - (dot + gap + tw) * 0.5f;
     const float cy   = area.getCentreY();
 
-    const juce::Colour dotCol  = on ? juce::Colours::white : Palette::textStrong;
+    // A caption colour set on the button (a warning, say) overrides the default.
+    const juce::Colour idleText = button.isColourSpecified (juce::TextButton::textColourOffId)
+                                      ? button.findColour (juce::TextButton::textColourOffId) : Palette::textStrong;
+    const juce::Colour dotCol  = on ? juce::Colours::white : idleText;
     const juce::Colour glowCol = on ? juce::Colours::white : Palette::badge;
 
     const juce::Rectangle dotRect (xL, cy - dot * 0.5f, dot, dot);
@@ -284,7 +313,7 @@ void PreDropLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& bu
     g.fillRoundedRectangle (dotRect, 1.5f * s);
 
     g.setFont (font);
-    g.setColour (on ? juce::Colours::white : Palette::textStrong);
+    g.setColour (on ? juce::Colours::white : idleText);
     g.drawText (text, juce::Rectangle<float> (xL + dot + gap, area.getY(), tw + 2.0f * s, area.getHeight()),
                 juce::Justification::centredLeft, false);
 }

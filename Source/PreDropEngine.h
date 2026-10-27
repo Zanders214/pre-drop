@@ -2,11 +2,13 @@
 
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <memory>
 
 #include "RiserSample.h"
+#include "RtHandoff.h"
 #include "RtSafety.h"
 
 /**
@@ -35,7 +37,8 @@
     full Amount and depth 0.5, 0 dB at depth 1. The riser follows the signal's
     level, so the balance holds on quiet and loud material alike. The riser is
     band-passed noise by default; setRiserSample swaps in a looping user sample
-    at the same calibrated level. The mapping
+    at the same calibrated level. Reverb and delay can likewise be swapped for
+    external effects (hosted plugins) via setExternalEffects. The mapping
     from the macro to each effect's targets lives in mapMacro(), a pure function
     and therefore the part most worth unit-testing.
 */
@@ -44,12 +47,15 @@ class PreDropEngine
 public:
     PreDropEngine() = default;
 
-    ~PreDropEngine()
+    /** A reverb or delay supplied from outside (a hosted plugin), used in place
+        of the built-in one. It gets the high-passed signal and must return its
+        100%-wet output in place; the engine sets its level exactly as it would
+        the built-in effect's. Called on the audio thread. */
+    struct ExternalEffect
     {
-        // Nothing else is running by now, so the hand-over slots can be freed here.
-        std::unique_ptr<RiserSample> (incomingRiser.exchange (nullptr));
-        collectRetiredRiserSamples();
-    }
+        virtual ~ExternalEffect() = default;
+        virtual void process (float* const* wet, int numChannels, int numSamples) noexcept = 0;
+    };
 
     /** Per-effect targets derived from the macro, already in engineering units. */
     struct Targets
@@ -60,6 +66,8 @@ public:
         float delayWet      = 0.0f;    // echo gain
         float delayFeedback = 0.0f;    // 0..maxDelayFeedback, well below 1 for stability
         float riserLevel    = 0.0f;    // riser RMS as a fraction of the signal's RMS
+        float reverbLevel   = 0.0f;    // reverb / delay wet level as a fraction of the
+        float delayLevel    = 0.0f;    // signal (what an external effect is scaled to)
         float riserCutoffHz = 200.0f;  // band-pass centre of the riser
     };
 
@@ -127,8 +135,9 @@ public:
 
         // 2. Reverb: the room grows with Amount; the wet send is compensated for
         //    the louder tail so its level rises in step with the others.
-        t.reverbSize = 0.30f + 0.65f * p;
-        t.reverbWet  = nominalWetRatio * depthGain (depth.reverb) * p / reverbWetGain (t.reverbSize);
+        t.reverbSize  = 0.30f + 0.65f * p;
+        t.reverbLevel = nominalWetRatio * depthGain (depth.reverb) * p;
+        t.reverbWet   = t.reverbLevel / reverbWetGain (t.reverbSize);
 
         // 3. Delay: feedback grows with Amount, and the echo gain is scaled by
         //    sqrt(1 - fb^2) because a feedback loop's steady-state energy is
@@ -139,8 +148,8 @@ public:
         //    Capping feedback at 0.6 bounds that to 2x (+6 dB, ~5 s tail) rather
         //    than 3.5x (+11 dB) at 0.85.
         t.delayFeedback = maxDelayFeedback * p;
-        t.delayWet      = nominalWetRatio * depthGain (depth.delay) * p
-                        * std::sqrt (1.0f - t.delayFeedback * t.delayFeedback);
+        t.delayLevel    = nominalWetRatio * depthGain (depth.delay) * p;
+        t.delayWet      = t.delayLevel * std::sqrt (1.0f - t.delayFeedback * t.delayFeedback);
 
         // 4. Riser: level relative to the signal, sweeping 200 Hz -> 8 kHz.
         t.riserLevel    = nominalWetRatio * depthGain (depth.riser) * p;
@@ -179,11 +188,11 @@ public:
         // Not running concurrently with process(), so a riser sample handed over
         // since the last block (typically one rebuilt for this sample rate) can
         // be adopted, and the one it replaces freed, right here.
-        if (auto* next = incomingRiser.exchange (nullptr))
-            activeRiser.reset (next);
+        riserSample.adoptNow();
 
-        dryBuffer   .setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
-        reverbBuffer.setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
+        buffers.dry     .setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
+        buffers.reverb  .setSize (numCh, juce::jmax (1, maximumBlockSize), false, false, true);
+        buffers.external.setSize (2 * externalChannels, juce::jmax (1, maximumBlockSize), false, false, true);
 
         const double ramp = 0.04; // 40 ms, fast enough to track but kills zipper noise
         sm.hpfCutoff  .reset (sampleRate, ramp);
@@ -196,6 +205,8 @@ public:
         sm.mix        .reset (sampleRate, ramp);
         sm.trim       .reset (sampleRate, ramp);
         sm.hpfBlend   .reset (sampleRate, 0.03);   // in / out of the high-pass
+        sm.extReverb  .reset (sampleRate, ramp);
+        sm.extDelay   .reset (sampleRate, ramp);
 
         // Snap smoothers to the current targets so the first block does not sweep.
         sm.hpfCutoff  .setCurrentAndTargetValue (t.hpfCutoffHz);
@@ -234,17 +245,18 @@ public:
         message thread: process() adopts it at the start of a block without
         allocating or locking, and returns the replaced one for
         collectRetiredRiserSamples() to free. */
-    void setRiserSample (std::unique_ptr<RiserSample> sample)
-    {
-        collectRetiredRiserSamples();
-        // A sample handed over earlier but not adopted yet is simply replaced.
-        std::unique_ptr<RiserSample> (incomingRiser.exchange (sample.release()));
-    }
+    void setRiserSample (std::unique_ptr<RiserSample> sample) { riserSample.send (std::move (sample)); }
 
     /** Frees riser samples the audio thread has swapped out. Message thread. */
-    void collectRetiredRiserSamples()
+    void collectRetiredRiserSamples() { riserSample.collect(); }
+
+    /** The external reverb and delay for this block (nullptr: the built-in
+        one). Audio thread, before process(). Switching crossfades over 40 ms,
+        except that a removed effect stops at once (it can't be called again). */
+    void setExternalEffects (ExternalEffect* reverbEffect, ExternalEffect* delayEffect) noexcept
     {
-        std::unique_ptr<RiserSample> (retiredRiser.exchange (nullptr));
+        external.reverb = reverbEffect;
+        external.delay  = delayEffect;
     }
 
     void setAmount       (float newAmount) noexcept { amount       = newAmount; }
@@ -273,26 +285,24 @@ public:
         if (numSamples <= 0 || channels <= 0)
             return;
 
-        // Adopt a newly handed-over riser sample. The replaced one goes to the
-        // retired slot for the message thread to free; if that slot is still
-        // occupied, wait a block rather than lose it.
-        if (retiredRiser.load() == nullptr)
-            if (auto* next = incomingRiser.exchange (nullptr))
-            {
-                retiredRiser.store (activeRiser.release());
-                activeRiser.reset (next);
-                riser.samplePos = 0;
-            }
+        // Adopt a newly handed-over riser sample (the replaced one goes back to
+        // the message thread to free), and restart playback for it.
+        if (bool adopted = false; riserSample.acquire (&adopted) != nullptr && adopted)
+            riser.samplePos = 0;
 
         // Keep a clean copy of the input for the final dry/wet mix.
         for (int ch = 0; ch < channels; ++ch)
-            dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+            buffers.dry.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
+        // An external reverb / delay takes over from the built-in one: the
+        // built-in ramps out while the external one ramps in at the same level.
         const Targets t = mapMacro (amount, depths);
         sm.hpfCutoff  .setTargetValue (t.hpfCutoffHz);
-        sm.reverbWet  .setTargetValue (t.reverbWet);
+        sm.reverbWet  .setTargetValue (external.reverb != nullptr ? 0.0f : t.reverbWet);
         sm.reverbSize .setTargetValue (t.reverbSize);
-        sm.delayWet   .setTargetValue (t.delayWet);
+        sm.delayWet   .setTargetValue (external.delay != nullptr ? 0.0f : t.delayWet);
+        sm.extReverb  .setTargetValue (external.reverb != nullptr ? t.reverbLevel : 0.0f);
+        sm.extDelay   .setTargetValue (external.delay  != nullptr ? t.delayLevel  : 0.0f);
         sm.delayFb    .setTargetValue (t.delayFeedback);
         sm.riserLevel .setTargetValue (t.riserLevel);
         sm.riserCutoff.setTargetValue (std::min (t.riserCutoffHz, 0.45f * (float) sr));   // clear of Nyquist
@@ -356,6 +366,13 @@ public:
             riser.signalRms   = std::sqrt (riser.meanSquare);
         }
 
+        // Keep the high-passed signal aside for any external effects (stage 3b):
+        // the delay stage below writes over it.
+        for (int slot = 0; slot < 2; ++slot)
+            if ((slot == 0 ? external.reverb : external.delay) != nullptr)
+                for (int ch = 0; ch < juce::jmin (channels, externalChannels); ++ch)
+                    buffers.external.copyFrom (slot * externalChannels + ch, 0, buffer, ch, 0, numSamples);
+
         // --- 2. Reverb, wet only, on a copy of the high-passed signal ------------
         const int reverbChannels = juce::jmin (channels, 2);
         const float reverbSize   = sm.reverbSize.skip (numSamples);
@@ -365,9 +382,9 @@ public:
             applyReverbParameters (reverbSize, reverbLevel);
 
             for (int ch = 0; ch < reverbChannels; ++ch)
-                reverbBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+                buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
-            juce::dsp::AudioBlock<float> block (reverbBuffer);
+            juce::dsp::AudioBlock<float> block (buffers.reverb);
             auto subBlock = block.getSubsetChannelBlock (0, (size_t) reverbChannels)
                                  .getSubBlock (0, (size_t) numSamples);
             juce::dsp::ProcessContextReplacing ctx (subBlock);
@@ -403,10 +420,15 @@ public:
         // Sum the reverb in alongside the signal and echoes.
         if (reverbOn)
             for (int ch = 0; ch < reverbChannels; ++ch)
-                juce::FloatVectorOperations::add (data[ch], reverbBuffer.getReadPointer (ch), numSamples);
+                juce::FloatVectorOperations::add (data[ch], buffers.reverb.getReadPointer (ch), numSamples);
+
+        // --- 3b. External reverb / delay: each gets the high-passed signal (kept
+        //     aside above) and its wet output is summed in at the calibrated level.
+        runExternal (external.reverb, sm.extReverb, 0, data, channels, numSamples);
+        runExternal (external.delay,  sm.extDelay,  1, data, channels, numSamples);
 
         // --- 4. Riser: user sample or filtered-noise sweep (summed in parallel) --
-        const RiserSample* sample = activeRiser.get();
+        const RiserSample* sample = riserSample.current();
         const bool useSample = sample != nullptr && sample->length() > 0;
 
         const float rmsStep = (riser.signalRms - riserRmsStart) / (float) numSamples;
@@ -463,7 +485,7 @@ public:
         }
 
         // --- 5. Global dry/wet mix + output trim (per sample) -------------------
-        auto* const* dry = dryBuffer.getArrayOfReadPointers();
+        auto* const* dry = buffers.dry.getArrayOfReadPointers();
         for (int n = 0; n < numSamples; ++n)
         {
             const float wetDry = sm.mix.getNextValue();
@@ -493,6 +515,34 @@ private:
             isIdle = true;
         }
         return false;
+    }
+
+    // Runs one external effect on its kept send (slot 0 reverb, 1 delay) and
+    // sums its wet output in at the smoothed level. A removed effect can't be
+    // called again, so its level drops straight to zero.
+    template <typename Smoother>
+    void runExternal (ExternalEffect* effect, Smoother& level, int slot,
+                      float* const* data, int channels, int numSamples) noexcept
+    {
+        if (effect == nullptr)
+        {
+            level.setCurrentAndTargetValue (0.0f);
+            return;
+        }
+
+        const int fxChannels = juce::jmin (channels, externalChannels);
+        std::array<float*, externalChannels> send {};
+        for (int ch = 0; ch < fxChannels; ++ch)
+            send[(size_t) ch] = buffers.external.getWritePointer (slot * externalChannels + ch);
+
+        effect->process (send.data(), fxChannels, numSamples);
+
+        for (int n = 0; n < numSamples; ++n)
+        {
+            const float gain = level.getNextValue();
+            for (int ch = 0; ch < channels; ++ch)
+                data[ch][n] += gain * send[(size_t) juce::jmin (ch, fxChannels - 1)][n];
+        }
     }
 
     void applyReverbParameters (float roomSize, float wetLevel)
@@ -536,8 +586,24 @@ private:
     juce::dsp::Reverb                        reverb;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine { maxDelaySamples };
     juce::Random                             random;
-    juce::AudioBuffer<float>                 dryBuffer;
-    juce::AudioBuffer<float>                 reverbBuffer;
+
+    // The input kept for the dry/wet mix, the built-in reverb's send, and the
+    // external effects' sends (two channels each: reverb, then delay).
+    static constexpr int externalChannels = 2;
+    struct Buffers
+    {
+        juce::AudioBuffer<float> dry;
+        juce::AudioBuffer<float> reverb;
+        juce::AudioBuffer<float> external;
+    };
+    Buffers buffers;
+
+    struct ExternalEffects
+    {
+        ExternalEffect* reverb = nullptr;
+        ExternalEffect* delay  = nullptr;
+    };
+    ExternalEffects external;
 
     // Last cutoff pushed to the HPF, so process() can skip recomputing an
     // identical coefficient (an std::tan) every sample. -1 forces the first apply.
@@ -567,11 +633,8 @@ private:
     };
     Riser riser;
 
-    // User riser sample, owned by the audio thread once adopted. New ones arrive
-    // through `incomingRiser`; replaced ones leave through `retiredRiser`.
-    std::unique_ptr<RiserSample> activeRiser;
-    std::atomic<RiserSample*>    incomingRiser { nullptr };
-    std::atomic<RiserSample*>    retiredRiser  { nullptr };
+    // User riser sample, handed from the message thread to the audio thread.
+    RtHandoff<RiserSample> riserSample;
 
     // One ramp per mapped target, so every parameter change glides instead of
     // stepping. Cutoffs ramp multiplicatively (even in pitch), the rest linearly.
@@ -587,6 +650,8 @@ private:
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mix;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> trim;
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> hpfBlend;   // dry 0 .. filtered 1
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> extReverb;  // external effects' levels
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> extDelay;
     };
     Smoothers sm;
 

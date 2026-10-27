@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "EffectSlotButton.h"
 #include "PluginProcessor.h"
 #include "PreDropLookAndFeel.h"
 #include "PreDropTheme.h"
@@ -17,15 +18,22 @@
     The link status (following the main, or why not), the track's name as it
     appears in the main's list (double-click to rename), and this track's
     HIGH-PASS / REVERB / DELAY levels: its share of the main's depth for each
-    effect, the same levels the main's TRACKS panel edits. A RETURN has no row
+    effect, the same levels the main's TRACKS panel edits, with the reverb's and
+    delay's sources (built-in or a plug-in) under theirs. A RETURN has no row
     in that list (each track's send knob is its amount), so in return mode the
     name row explains the sends instead.
 */
 class TrackPanel : public juce::Component
 {
 public:
-    explicit TrackPanel (PreDropAudioProcessor& p) : processor (p)
+    explicit TrackPanel (PreDropAudioProcessor& p)
+        : processor (p),
+          reverbSlot (p, PreDropAudioProcessor::EffectSlot::reverb, pillLookAndFeel),
+          delaySlot  (p, PreDropAudioProcessor::EffectSlot::delay,  pillLookAndFeel)
     {
+        addAndMakeVisible (reverbSlot);
+        addAndMakeVisible (delaySlot);
+
         name.setEditable (false, true, false);   // double-click to rename
         name.setJustificationType (juce::Justification::centredLeft);
         name.setColour (juce::Label::textColourId, PreDrop::Palette::textStrong);
@@ -68,6 +76,7 @@ public:
     {
         uiScale = juce::jmax (0.1f, s);
         knobLookAndFeel.setUiScale (uiScale);
+        pillLookAndFeel.setUiScale (uiScale);
     }
 
     /** Updates the status and name. Called from the editor's timer. */
@@ -75,6 +84,8 @@ public:
     {
         if (! name.isBeingEdited() && name.getText() != processor.getTrackName())
             name.setText (processor.getTrackName(), juce::dontSendNotification);
+        reverbSlot.refresh();
+        delaySlot.refresh();
 
         if (const auto status = statusLines().first; status != shownStatus)
         {
@@ -153,16 +164,22 @@ public:
         nameCaption = nameRow.removeFromLeft (px (80.0f));
         name.setBounds (nameRow);
 
-        // Three columns, each a small knob with its label and level beside it.
+        // Three columns, each a small knob with its label and level beside it
+        // and, for the reverb and delay, the effect's source underneath.
         area.removeFromTop (px (8.0f));
-        auto row = area.removeFromTop (px (40.0f));
+        auto row = area.removeFromTop (px (36.0f) + px (4.0f) + px (14.0f));
         const int colW = row.getWidth() / 3;
+        const std::array<EffectSlotButton*, 3> sources { nullptr, &reverbSlot, &delaySlot };
         for (size_t i = 0; i < levels.size(); ++i)
         {
             auto col = row.removeFromLeft (colW);
-            levels[i].setBounds (col.removeFromLeft (px (36.0f)).withSizeKeepingCentre (px (36.0f), px (36.0f)));
-            col.removeFromLeft (px (5.0f));
-            levelText[i] = col.withSizeKeepingCentre (col.getWidth(), px (26.0f));
+            auto knobRow = col.removeFromTop (px (36.0f));
+            levels[i].setBounds (knobRow.removeFromLeft (px (36.0f)).withSizeKeepingCentre (px (36.0f), px (36.0f)));
+            knobRow.removeFromLeft (px (5.0f));
+            levelText[i] = knobRow.withSizeKeepingCentre (knobRow.getWidth(), px (26.0f));
+            col.removeFromTop (px (4.0f));
+            if (sources[i] != nullptr)
+                sources[i]->setBounds (col.removeFromTop (px (14.0f)).withTrimmedRight (px (8.0f)));
         }
     }
 
@@ -188,6 +205,9 @@ private:
 
     PreDropAudioProcessor& processor;
     DepthKnobLookAndFeel   knobLookAndFeel;
+    PreDropLookAndFeel     pillLookAndFeel;
+    EffectSlotButton       reverbSlot;
+    EffectSlotButton       delaySlot;
     juce::Label name;
     std::array<juce::Slider, 3> levels;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 3> attachments;

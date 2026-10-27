@@ -21,8 +21,9 @@ to the same level relative to your signal (-6 dB at full Amount with the effect
 knobs at their 50% default), and the riser follows your track's loudness, so the
 balance holds on quiet and loud material alike.
 
-The riser can be your own sample: it loops (with a short crossfade so the loop point
-doesn't click), restarts from the top at the start of each build-up, and plays at
+The riser can be your own sample: open **EFFECTS** and click the pill under the
+**RISER** knob (it says *NOISE*), or drop a WAV / AIFF / FLAC anywhere on the plugin.
+It loops (with a short crossfade so the loop point doesn't click), restarts from the top at the start of each build-up, and plays at
 the same calibrated level as the built-in noise. The file (up to 60 s) is saved
 inside the plugin state, so your Ableton project keeps its riser even if the
 original file moves.
@@ -56,6 +57,25 @@ no main passes its audio through untouched, and a RETURN with no main is silent.
 (Linking works because hosts like Ableton Live run every plugin instance in one
 process.)
 
+## Your own reverb and delay
+
+Open **EFFECTS**: the pills under the **REVERB** and **DELAY** knobs choose what
+PreDrop uses as its reverb and its delay: **Built-in** (default), any **VST3 effect**
+from your plug-in folders, or one you browse to. Pick one and its window opens so you
+can shape its sound (reopen it from the pill's menu). Set it to **100% wet**: PreDrop
+feeds it the high-passed signal and brings its output in at the same calibrated level
+as the built-in effect, so Amount, the depth knobs and per-track levels all keep
+working (the pill turns amber and says *100% WET?* if it hears the dry signal
+coming through). The plug-in and its settings are saved with your set; on a computer
+where it isn't installed, the built-in effect plays and the pill says *MISSING*, and
+its settings are kept for when it is. TRACKs and RETURNs have the same pills, under
+their REVERB and DELAY levels.
+
+With the built-in effects, Amount also grows the room and the delay feedback; with
+your own plug-in it sets the level, while the plug-in's own knobs set its sound. A
+plug-in that reports latency adds that much pre-delay to its effect (reverbs and
+delays rarely have any).
+
 ## Controls
 
 | Knob        | What it does                                                        |
@@ -65,7 +85,7 @@ process.)
 | **Output**  | Output trim (dB) to tame the energy that piles up near the top.      |
 | **MAIN / TRACK / RETURN** | The header pill: shows this PreDrop's role and opens a menu to change it (see above). |
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
-| **Riser**   | The riser sound. Built-in noise by default; click **RISER** (or drop a WAV / AIFF / FLAC anywhere on the plugin) to use your own sample instead, and pick *Use built-in noise* to go back. |
+| **Sources** | The pills under the REVERB, DELAY and RISER knobs in EFFECTS (and under REVERB and DELAY on TRACK / RETURN): what each effect uses. Reverb and delay: *BUILT-IN* or one of your VST3 effects. Riser: *NOISE* or your own sample (drop a WAV / AIFF / FLAC anywhere on the plugin; pick *Use built-in noise* to go back). |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 
 ## Building
@@ -108,6 +128,9 @@ Source/
   PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
   PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
   RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
+  RtHandoff.h                lock-free hand-over of objects to the audio thread
+  HostedEffect.h             a VST3 effect standing in for the reverb / delay, and its window
+  EffectSlotButton.h         the reverb / delay source pill: built-in or a VST3, its menu and warnings
   LinkHub.h                  process-wide link between the MAIN and its TRACK / RETURN instances
   TrackMatrix.h              the main's TRACKS panel (applies-to switch, per-track levels)
   TrackPanel.h               what a TRACK / RETURN shows: link status, name, its effect levels
@@ -123,7 +146,7 @@ The editor recreates the **"Direction D — Neon Clean"** design natively in JUC
 (no WebView): a multicolour progress-ring **Amount** knob with a centred readout,
 four effect status chips (the HPF cutoff, and each other effect's Amount × depth), a
 live build-up energy histogram you can also drag to set Amount, Mix / Output sliders,
-and the EFFECTS panel of depth knobs. Indicator values are derived from Amount and
+and the EFFECTS panel of depth knobs, each with its source pill beneath. Indicator values are derived from Amount and
 the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
 against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).

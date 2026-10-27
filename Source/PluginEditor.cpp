@@ -39,6 +39,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     : AudioProcessorEditor (&p),
       processorRef (p),
       buildUpCurve (p.getState(), "amount"),
+      slotButtons (p, lnf),
       link (p)
 {
     // --- Amount knob ---------------------------------------------------------
@@ -95,10 +96,14 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     effectsButton.setPaintingIsUnclipped (true);
 
     // --- RISER sample pill ----------------------------------------------------
+    // The riser's source (noise or a sample) sits under the RISER knob in the
+    // EFFECTS panel, like the reverb's and delay's sources under theirs.
     riserUi.button.setLookAndFeel (&lnf);
+    PreDropLookAndFeel::setCompactPill (riserUi.button);
+    riserUi.button.setComponentID ("riserSource");
     riserUi.button.setPaintingIsUnclipped (true);
     riserUi.button.onClick = [this] { showRiserMenu(); };
-    addAndMakeVisible (riserUi.button);
+    addChildComponent (riserUi.button);   // shown with the EFFECTS panel
     updateRiserButton();
 
     // --- Linking: TRACKS reveal toggle, MAIN / TRACK pill, the two panels -----
@@ -118,6 +123,8 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 
     addChildComponent (link.matrix);
     addChildComponent (link.panel);
+    addChildComponent (slotButtons.reverb);   // shown with the EFFECTS panel
+    addChildComponent (slotButtons.delay);
 
     // --- Indicators (a TRACK shows what the main is driving it with) ----------
     effectChips.setAmountSource ([this] { return displayedAmount(); });
@@ -157,6 +164,7 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
 PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
 {
     stopTimer();
+    processorRef.closeEffectPluginWindows();   // plug-in windows close with PreDrop's
     amountSlider.setLookAndFeel (nullptr);
     mixSlider.setLookAndFeel (nullptr);
     trimSlider.setLookAndFeel (nullptr);
@@ -178,6 +186,9 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
     buildUpCurve.setVisible (main && reveal == Reveal::curve);
     for (auto& sl : depthSliders)
         sl.setVisible (main && reveal == Reveal::effects);
+    slotButtons.reverb.setVisible (main && reveal == Reveal::effects);
+    slotButtons.delay.setVisible (main && reveal == Reveal::effects);
+    riserUi.button.setVisible (main && reveal == Reveal::effects);
     link.matrix.setVisible (main && reveal == Reveal::tracks);
 
     effectsButton.setToggleState (reveal == Reveal::effects, juce::dontSendNotification);
@@ -228,7 +239,6 @@ void PreDropAudioProcessorEditor::applyRole()
     link.roleButton.setButtonText (ret ? "RETURN" : (track ? "TRACK" : "MAIN"));
     link.roleButton.setToggleState (track, juce::dontSendNotification);
 
-    riserUi.button.setVisible (! track);
     effectsButton.setVisible (! track);
     link.tracksButton.setVisible (! track);
     link.panel.setReturnMode (ret);
@@ -338,28 +348,13 @@ void PreDropAudioProcessorEditor::loadRiser (const juce::File& file)
 
 void PreDropAudioProcessorEditor::fitRiserLabel()
 {
-    // Shorten the sample's name until "RISER: NAME" fits the pill, which
-    // shares its row with TRACKS and EFFECTS.
+    // NOISE, or the sample's name shortened to fit the pill under the knob.
     const auto& name = riserUi.shownName;
-    auto label = name.isEmpty() ? juce::String ("NOISE")
-                                : juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension().toUpperCase();
-
-    // Before the first layout the pill has no width to fit to yet.
-    if (riserUi.button.getWidth() > 0)
-    {
-        const auto font = Fonts::sans (10.0f * uiScale, true, 0.16f);         // the pill's caption font
-        const float room = (float) riserUi.button.getWidth() - 30.0f * uiScale; // dot, gap and padding
-        // From the code point: a "\u2026" literal isn't UTF-8 under MSVC's default code page.
-        const auto ellipsis = juce::String::charToString ((juce::juce_wchar) 0x2026);
-        auto kept = label;
-        while (kept.isNotEmpty() && textWidth (font, "RISER: " + label) > room)
-        {
-            kept = kept.dropLastCharacters (1);
-            label = kept + ellipsis;
-        }
-    }
-
-    riserUi.button.setButtonText ("RISER: " + label);
+    const auto label = name.isEmpty() ? juce::String ("NOISE")
+                                      : juce::File::createFileWithoutCheckingPath (name).getFileNameWithoutExtension().toUpperCase();
+    const auto& pill = riserUi.button;
+    riserUi.button.setButtonText (PreDropLookAndFeel::fitPillLabel (label, true, (float) pill.getWidth(),
+                                                                    PreDropLookAndFeel::pillScale (true, (float) pill.getHeight())));
 }
 
 bool PreDropAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
@@ -412,6 +407,11 @@ void PreDropAudioProcessorEditor::timerCallback()
         link.matrix.refresh();
     if (link.panel.isVisible())
         link.panel.refresh();
+    if (slotButtons.reverb.isVisible())
+    {
+        slotButtons.reverb.refresh();
+        slotButtons.delay.refresh();
+    }
 
     const float a = displayedAmount();
     if (isTrackMode() && std::abs ((float) amountSlider.getValue() - a) > 1.0e-4f)
@@ -592,17 +592,15 @@ void PreDropAudioProcessorEditor::resized()
     area.removeFromTop (px (16.0f));                       // gap before chips
     effectChips.setBounds (area.removeFromTop (px (40.0f)));
 
-    // A slim row holds RISER, TRACKS and EFFECTS above the slot that the curve,
-    // the depth knobs and the TRACKS panel share.
+    // A slim row holds TRACKS and EFFECTS above the slot that the curve, the
+    // depth knobs and the TRACKS panel share.
     area.removeFromTop (px (8.0f));
     auto buttonRow = area.removeFromTop (px (18.0f));
     const int buttonRowTop = buttonRow.getY();
-    effectsButton.setBounds (buttonRow.removeFromRight (px (84.0f)));
-    buttonRow.removeFromRight (px (8.0f));
-    link.tracksButton.setBounds (buttonRow.removeFromRight (px (76.0f)));
-    buttonRow.removeFromRight (px (8.0f));
-    riserUi.button.setBounds (buttonRow);
-    fitRiserLabel();
+    const int rowGap = px (8.0f);
+    link.tracksButton.setBounds (buttonRow.removeFromLeft ((buttonRow.getWidth() - rowGap) / 2));
+    buttonRow.removeFromLeft (rowGap);
+    effectsButton.setBounds (buttonRow);
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
     layout.reveal = area.removeFromTop (px (114.0f));
@@ -615,16 +613,23 @@ void PreDropAudioProcessorEditor::resized()
     link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
 
     // Lay out the four depth dials across the reveal slot (used when open): each
-    // column is an arc on top with its name + value stacked beneath it.
+    // column is an arc on top, its name + value beneath, and under those the
+    // effect's source (built-in or a plug-in; noise or a sample for the
+    // riser). The high-pass has nothing to swap, so no source.
     {
         auto knobs = layout.reveal.reduced (px (8.0f), px (8.0f));
         const int kGap      = px (10.0f);
         const int colW      = (knobs.getWidth() - kGap * (numDepths - 1)) / numDepths;
-        const int textBlock = px (26.0f);                  // name + value lines
-        const int dialSize  = juce::jmin (colW, knobs.getHeight() - textBlock);
+        const int textBlock = px (27.0f);                  // name + value lines
+        const int pillGap   = px (2.0f);
+        const int pillH     = px (14.0f);
+        const int dialSize  = juce::jmin (colW, knobs.getHeight() - textBlock - pillGap - pillH);
 
-        // Vertically centre the dial + text block within the slot.
-        knobs.removeFromTop (juce::jmax (0, (knobs.getHeight() - (dialSize + textBlock)) / 2));
+        // Vertically centre the column contents within the slot.
+        knobs.removeFromTop (juce::jmax (0, (knobs.getHeight() - (dialSize + textBlock + pillGap + pillH)) / 2));
+
+        // Source pills, by column (depthParamIds order: reverb, delay, riser).
+        const std::array<juce::Component*, numDepths> sources { &slotButtons.reverb, &slotButtons.delay, &riserUi.button, nullptr };
 
         for (size_t i = 0; i < depthSliders.size(); ++i)
         {
@@ -635,7 +640,13 @@ void PreDropAudioProcessorEditor::resized()
             layout.depthKnobs[i] = col;                     // full column for name/value paint
             depthSliders[i].setBounds (col.removeFromTop (dialSize)
                                           .withSizeKeepingCentre (dialSize, dialSize));
+            col.removeFromTop (textBlock + pillGap);
+            // Pills reach into the gaps between columns (a little apart from
+            // each other) so a warning like 100% WET? fits in wider fonts too.
+            if (sources[i] != nullptr)
+                sources[i]->setBounds (col.removeFromTop (pillH).withSizeKeepingCentre (colW + kGap - px (4.0f), pillH));
         }
+        fitRiserLabel();
     }
 
     area.removeFromTop (px (20.0f));                       // gap before slider section

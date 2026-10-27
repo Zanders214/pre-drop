@@ -56,8 +56,12 @@ set(PREDROP_APP_SOURCES
 
 target_sources(PreDrop PRIVATE ${PREDROP_APP_SOURCES})
 
+# PreDrop can host VST3 effects in its reverb / delay slots.
+set(PREDROP_HOSTING_DEFINITIONS JUCE_PLUGINHOST_VST3=1)
+
 target_compile_definitions(PreDrop
     PUBLIC
+        ${PREDROP_HOSTING_DEFINITIONS}
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
@@ -128,9 +132,13 @@ if(PREDROP_BUILD_TESTS)
     target_sources(PreDropPluginTests PRIVATE Tests/PluginTests.cpp ${PREDROP_APP_SOURCES})
     target_include_directories(PreDropPluginTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_compile_definitions(PreDropPluginTests PRIVATE
+        ${PREDROP_HOSTING_DEFINITIONS}
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JUCE_MODAL_LOOPS_PERMITTED=1        # lets the test pump the message loop
-        JucePlugin_Name="ZandersPreDrop")
+        JucePlugin_Name="ZandersPreDrop"
+        # PreDrop's own VST3, hosted as a stand-in effect plug-in by the tests.
+        PREDROP_TEST_VST3="$<GENEX_EVAL:$<TARGET_PROPERTY:PreDrop_VST3,JUCE_PLUGIN_ARTEFACT_FILE>>")
+    add_dependencies(PreDropPluginTests PreDrop_VST3)
     target_link_libraries(PreDropPluginTests PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
@@ -168,6 +176,7 @@ if(PREDROP_RT_SANITIZE)
     target_sources(rt_check PRIVATE Tests/rt_check.cpp ${PREDROP_APP_SOURCES})
     target_include_directories(rt_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     target_compile_definitions(rt_check PRIVATE
+        ${PREDROP_HOSTING_DEFINITIONS}
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JucePlugin_Name="ZandersPreDrop"
         "PREDROP_RT_NONBLOCKING=[[clang::nonblocking]]")   # CMake passes brackets fine inside quotes
@@ -201,6 +210,7 @@ if(PREDROP_BUILD_BENCH)
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         ${nanobench_SOURCE_DIR}/src/include)   # we define ANKERL_NANOBENCH_IMPLEMENT ourselves
     target_compile_definitions(perf_bench PRIVATE
+        ${PREDROP_HOSTING_DEFINITIONS}
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JucePlugin_Name="ZandersPreDrop")
     target_link_libraries(perf_bench PRIVATE
