@@ -24,7 +24,7 @@
 */
 struct EffectSettings
 {
-    enum Id
+    enum class Id
     {
         reverbSize, reverbDamping, reverbWidth, reverbPreDelay,
         delaySync, delayNote, delayTime, delayFeedback, delayTone, delayPingPong,
@@ -32,6 +32,7 @@ struct EffectSettings
         riserStart, riserEnd, riserResonance,
         count
     };
+    static constexpr size_t count = static_cast<size_t> (Id::count);
 
     enum class Kind { percent, milliseconds, hertz, toggle, note, slope };
 
@@ -41,7 +42,9 @@ struct EffectSettings
         const char* name;          // its name in the host
         const char* label;         // its name on PreDrop's face
         Kind        kind;
-        float       min, max, defaultValue;
+        float       min;
+        float       max;
+        float       defaultValue;
         float       centre;        // the value mid-way along a control, or 0 for even steps
     };
 
@@ -84,33 +87,36 @@ struct EffectSettings
     void  set (Id id, float value) noexcept { values[(size_t) id] = juce::jlimit (specs[(size_t) id].min, specs[(size_t) id].max, value); }
     bool  isOn (Id id) const noexcept       { return values[(size_t) id] >= 0.5f; }
 
-    bool operator== (const EffectSettings& other) const noexcept { return values == other.values; }
+    friend bool operator== (const EffectSettings& a, const EffectSettings& b) noexcept { return a.values == b.values; }
 
     // --- What the values mean -------------------------------------------------
-    int note() const noexcept { return juce::jlimit (0, numNotes - 1, juce::roundToInt (values[delayNote])); }
+    int note() const noexcept { return juce::jlimit (0, numNotes - 1, juce::roundToInt ((*this)[Id::delayNote])); }
 
     /** The delay time: the note at `bpm` (or a stand-in tempo while there is
         none) when synced, else the milliseconds; never past the longest. */
     double delaySeconds (double bpm) const noexcept
     {
-        const double seconds = isOn (delaySync) ? noteQuarters[(size_t) note()] * 60.0 / (bpm > 0.0 ? bpm : fallbackBpm)
-                                                : values[delayTime] / 1000.0;
+        double seconds = (*this)[Id::delayTime] / 1000.0;
+        if (isOn (Id::delaySync))
+        {
+            const double tempo = bpm > 0.0 ? bpm : fallbackBpm;
+            seconds = noteQuarters[(size_t) note()] * 60.0 / tempo;
+        }
         return juce::jlimit (0.001, maxDelaySeconds, seconds);
     }
 
-    bool  hpfSteep() const noexcept  { return isOn (hpfSlope); }
+    bool  hpfSteep() const noexcept  { return isOn (Id::hpfSlope); }
 
     /** The high-pass's Q: 0.71 (flat, no peak) up to 8.5 at full resonance. */
-    float hpfQ() const noexcept      { return 0.70710678f * std::pow (12.0f, values[hpfResonance]); }
+    float hpfQ() const noexcept      { return 0.70710678f * std::pow (12.0f, (*this)[Id::hpfResonance]); }
 
     /** The riser band-pass's Q: 0.5 (wide) to 8 (a whistle); 1.5 by default. */
-    float riserQ() const noexcept    { return 0.5f * std::pow (16.0f, values[riserResonance]); }
+    float riserQ() const noexcept    { return 0.5f * std::pow (16.0f, (*this)[Id::riserResonance]); }
 
     /** A value as PreDrop shows it: "95%", "120 ms", "1/8D", "4.0 kHz"... */
     static juce::String format (Id id, float value)
     {
-        const auto& spec = specs[(size_t) id];
-        switch (spec.kind)
+        switch (specs[(size_t) id].kind)
         {
             case Kind::percent:      return juce::String (juce::roundToInt (value * 100.0f)) + "%";
             case Kind::milliseconds: return juce::String (juce::roundToInt (value)) + " ms";
@@ -119,10 +125,12 @@ struct EffectSettings
             case Kind::slope:        return value >= 0.5f ? "24 dB" : "12 dB";
             case Kind::hertz:        break;
         }
-        if (id == delayTone && value >= toneOpenHz - 1.0f)
+        if (id == Id::delayTone && value >= toneOpenHz - 1.0f)
             return "OPEN";
-        return value >= 1000.0f ? juce::String (value / 1000.0f, value >= 10000.0f ? 1 : 2) + " kHz"
-                                : juce::String (juce::roundToInt (value)) + " Hz";
+        if (value < 1000.0f)
+            return juce::String (juce::roundToInt (value)) + " Hz";
+        const int decimals = value >= 10000.0f ? 1 : 2;
+        return juce::String (value / 1000.0f, decimals) + " kHz";
     }
 
     std::array<float, count> values {};

@@ -3,7 +3,7 @@
 
     Framework-free (no JUCE, no display): the editor's numeric model is pure, so
     we can pin its math directly. The engine-coupling check (that the displayed
-    cutoff and engagement match PreDropEngine::mapMacro) is intentionally
+    cutoff and engagement match MacroMapping::mapMacro) is intentionally
     JUCE-side and lives in PreDropEngineTests.cpp.
 */
 

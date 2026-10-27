@@ -215,7 +215,9 @@ Source/
   BuildUpCurve.h             44-bar energy histogram; second handle on Amount
   PreDropTheme.h             shared palette, fonts, colour + value formatting
   PreDropVisualModel.h       pure macro -> indicator math (mirrors mapMacro)
-  PreDropEngine.h            host-agnostic DSP core (the macro mapping + effect chain)
+  PreDropEngine.h            host-agnostic DSP core (the effect chain)
+  MacroMapping.h             how Amount and the depths map to each effect's targets, and its calibration
+  RiserVoice.h               the riser: the noise sweep or the user's sample, following the signal's level
   RiserSample.h              a user riser sample, resampled / loop-crossfaded / level-matched
   RtHandoff.h                lock-free hand-over of objects to the audio thread
   HostedEffect.h             a VST3 effect standing in for the reverb / delay, and its window
@@ -243,7 +245,7 @@ the EFFECTS panel of depth knobs, each with its source pill beneath, a view per 
 for its settings (the RISER view also shows the sample's waveform and timing), and a
 preset pill in the header. Indicator values are derived from Amount and
 the depths through `PreDropVisualModel`, whose cutoff/engagement math is unit-tested
-against `PreDropEngine::mapMacro` so the UI never drifts from the DSP. The face is
+against `MacroMapping::mapMacro` so the UI never drifts from the DSP. The face is
 authored at 360 px and scales proportionally (resizable, fixed aspect ratio).
 
 Typography targets Space Grotesk (UI) + JetBrains Mono (numbers), used when the

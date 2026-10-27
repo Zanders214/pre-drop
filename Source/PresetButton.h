@@ -52,7 +52,7 @@ public:
     }
 
     /** Called with 1 to save, 0 to cancel. */
-    std::function<void (int)> onFinish;
+    void setOnFinish (std::function<void (int)> callback) { onFinish = std::move (callback); }
 
     juce::TextEditor& field() noexcept       { return nameField; }
     juce::TextButton& save() noexcept        { return saveButton; }
@@ -96,7 +96,7 @@ public:
 
     void parentSizeChanged() override
     {
-        if (auto* parent = getParentComponent())
+        if (const auto* parent = getParentComponent())
             setBounds (parent->getLocalBounds());
     }
 
@@ -110,7 +110,7 @@ private:
         saveButton.setEnabled (juce::File::createLegalFileName (name).isNotEmpty());
     }
 
-    void finish (int result)
+    void finish (int result) const
     {
         if (result == 1 && ! saveButton.isEnabled())
             return;
@@ -124,6 +124,7 @@ private:
     juce::TextButton     cancelButton;
     juce::Rectangle<int> panel;
     juce::Rectangle<int> titleArea;
+    std::function<void (int)> onFinish;   // with 1 to save, 0 to cancel
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PresetNamePrompt)
 };
@@ -233,7 +234,7 @@ public:
     {
         auto* editor = getTopLevelComponent();
         prompt = std::make_unique<PresetNamePrompt> (presets, shownName, getLookAndFeel());
-        prompt->onFinish = [this] (int result) { finishNaming (result); };
+        prompt->setOnFinish ([this] (int result) { finishNaming (result); });
         editor->addAndMakeVisible (*prompt);
         prompt->setBounds (editor->getLocalBounds());
         prompt->focus();
@@ -282,7 +283,7 @@ private:
                               [safe = juce::Component::SafePointer (this)] (const juce::FileChooser& fc)
         {
             if (safe != nullptr && fc.getResult() != juce::File())
-                safe->report (safe->presets.exportTo (fc.getResult()), "Couldn't export the preset");
+                report (safe->presets.exportTo (fc.getResult()), "Couldn't export the preset");
         });
     }
 
@@ -294,7 +295,7 @@ private:
         {
             if (safe != nullptr && fc.getResult().existsAsFile())
             {
-                safe->report (safe->presets.importFrom (fc.getResult()), "Couldn't import that preset");
+                report (safe->presets.importFrom (fc.getResult()), "Couldn't import that preset");
                 safe->refresh();
             }
         });

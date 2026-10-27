@@ -1,6 +1,7 @@
 #include "PresetManager.h"
 
 #include <algorithm>
+#include <array>
 
 #include "ParamIDs.h"
 #include "PluginProcessor.h"
@@ -14,8 +15,7 @@ const juce::Identifier currentNameId { "presetName" };   // on the processor's s
 constexpr int formatVersion = 1;
 }
 
-PresetManager::PresetManager (PreDropAudioProcessor& p)
-    : processor (p), presetFolder (defaultFolder())
+PresetManager::PresetManager (PreDropAudioProcessor& p) : processor (p)
 {
 }
 
@@ -53,10 +53,8 @@ void PresetManager::setCurrentName (const juce::String& name)
 bool PresetManager::isSoundParameter (const juce::String& id)
 {
     // Amount is the performance, the role and track levels the session's set-up.
-    for (const auto* left : { ParamID::amount, ParamID::role, ParamID::trackHpf, ParamID::trackReverb, ParamID::trackDelay })
-        if (id == left)
-            return false;
-    return true;
+    constexpr std::array left { ParamID::amount, ParamID::role, ParamID::trackHpf, ParamID::trackReverb, ParamID::trackDelay };
+    return std::none_of (left.begin(), left.end(), [&id] (const char* leftOut) { return id == leftOut; });
 }
 
 juce::ValueTree PresetManager::capture() const
@@ -65,7 +63,7 @@ juce::ValueTree PresetManager::capture() const
     preset.setProperty ("version", formatVersion, nullptr);
 
     for (auto* p : processor.getParameters())
-        if (auto* withId = dynamic_cast<juce::RangedAudioParameter*> (p); withId != nullptr && isSoundParameter (withId->getParameterID()))
+        if (const auto* withId = dynamic_cast<const juce::RangedAudioParameter*> (p); withId != nullptr && isSoundParameter (withId->getParameterID()))
         {
             juce::ValueTree value (parameterTag);
             value.setProperty ("id", withId->getParameterID(), nullptr);
@@ -155,8 +153,9 @@ juce::String PresetManager::importFrom (const juce::File& file)
             return "Couldn't make the presets folder: " + made.getErrorMessage();
         const auto name = file.getFileNameWithoutExtension();
         kept = fileFor (name);
-        for (int n = 2; kept.existsAsFile() && ! kept.hasIdenticalContentTo (file); ++n)
-            kept = fileFor (name + " (" + juce::String (n) + ")");
+        int number = 1;
+        while (kept.existsAsFile() && ! kept.hasIdenticalContentTo (file))
+            kept = fileFor (name + " (" + juce::String (++number) + ")");
         if (! kept.existsAsFile() && ! file.copyFileTo (kept))
             return "Couldn't copy " + file.getFileName() + " into the presets folder.";
     }
@@ -227,7 +226,7 @@ juce::ValueTree PresetManager::makePreset (const Factory& factory)
     return preset;
 }
 
-int PresetManager::installFactoryPresets()
+int PresetManager::installFactoryPresets() const
 {
     // A marker in the folder records that they've been written.
     const auto marker = presetFolder.getChildFile (".factory-presets-1");
@@ -244,8 +243,7 @@ int PresetManager::installFactoryPresets()
 
 juce::String PresetManager::write (const juce::ValueTree& preset, const juce::File& file)
 {
-    const auto xml = preset.createXml();
-    if (xml == nullptr || ! xml->writeTo (file))
+    if (const auto xml = preset.createXml(); xml == nullptr || ! xml->writeTo (file))
         return "Couldn't write " + file.getFullPathName() + ".";
     return {};
 }

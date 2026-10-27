@@ -220,7 +220,7 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 11 + EffectSettings::count, "26 parameters are exposed (11, and the effects' settings)");
+    check (p.getParameters().size() == 11 + (int) EffectSettings::count, "26 parameters are exposed (11, and the effects' settings)");
     check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
@@ -1639,13 +1639,13 @@ void testEffectViews()
     pumpMessages (30);
     check (reverb.isVisible() && ! effects->isVisible() && ! tracks->isVisible() && reverb.getY() <= effects->getY(),
            "the reverb's pill opens the REVERB view, over the button row");
-    check (reverb.knob (EffectSettings::reverbSize) != nullptr && reverb.knob (EffectSettings::reverbPreDelay) != nullptr
-             && reverb.knob (EffectSettings::delayTime) == nullptr && reverb.sourcePill() != nullptr,
+    check (reverb.knob (EffectSettings::Id::reverbSize) != nullptr && reverb.knob (EffectSettings::Id::reverbPreDelay) != nullptr
+             && reverb.knob (EffectSettings::Id::delayTime) == nullptr && reverb.sourcePill() != nullptr,
            "it has the reverb's knobs and its source");
-    check (reverb.knob (EffectSettings::reverbSize)->valueText() == "95%" && hasDetail (render (reverb)), "the view renders, with its values");
-    reverb.knob (EffectSettings::reverbDamping)->slider().setValue (0.8, juce::sendNotificationSync);
+    check (reverb.knob (EffectSettings::Id::reverbSize)->valueText() == "95%" && hasDetail (render (reverb)), "the view renders, with its values");
+    reverb.knob (EffectSettings::Id::reverbDamping)->slider().setValue (0.8, juce::sendNotificationSync);
     check (approx (param (p, "reverbDamping"), 0.8f, 1.0e-4f), "a knob sets its parameter");
-    check (approx (p.getEffectSettings()[EffectSettings::reverbDamping], 0.8f, 1.0e-4f), "which the processor reads");
+    check (approx (effectSettingsOf (p.getState())[EffectSettings::Id::reverbDamping], 0.8f, 1.0e-4f), "which the processor reads");
     reverb.back().triggerClick();
     pumpMessages (30);
     check (! reverb.isVisible() && effects->isVisible() && effects->getToggleState(), "BACK returns to EFFECTS");
@@ -1653,15 +1653,15 @@ void testEffectViews()
     // DELAY: SYNC picks the note or the milliseconds.
     slots[1]->triggerClick();
     pumpMessages (30);
-    check (delay.isVisible() && delay.sync().getToggleState() && delay.knob (EffectSettings::delayNote)->isVisible()
-             && ! delay.knob (EffectSettings::delayTime)->isVisible(),
+    check (delay.isVisible() && delay.sync().getToggleState() && delay.knob (EffectSettings::Id::delayNote)->isVisible()
+             && ! delay.knob (EffectSettings::Id::delayTime)->isVisible(),
            "the DELAY view starts synced, with the note");
     check (delay.getNote().contains ("ms") && delay.getNote().contains ("120 BPM"), "it says how long the echoes are (at 120 BPM with no tempo)");
     delay.sync().triggerClick();
     pumpMessages (30);
     delay.refresh();
-    check (param (p, "delaySync") < 0.5f && delay.knob (EffectSettings::delayTime)->isVisible()
-             && ! delay.knob (EffectSettings::delayNote)->isVisible(),
+    check (param (p, "delaySync") < 0.5f && delay.knob (EffectSettings::Id::delayTime)->isVisible()
+             && ! delay.knob (EffectSettings::Id::delayNote)->isVisible(),
            "SYNC off shows the milliseconds");
     delay.pingPong().triggerClick();
     pumpMessages (30);
@@ -1671,23 +1671,23 @@ void testEffectViews()
     // A plug-in in the slot: the built-in's settings are dimmed.
     p.getEffectPlugins().load (PreDropAudioProcessor::EffectSlot::delay, juce::File (PREDROP_TEST_VST3));
     delay.refresh();
-    check (! delay.usesBuiltIn() && ! delay.knob (EffectSettings::delayFeedback)->isEnabled() && delay.getNote().contains ("plug-in"),
+    check (! delay.usesBuiltIn() && ! delay.knob (EffectSettings::Id::delayFeedback)->isEnabled() && delay.getNote().contains ("plug-in"),
            "with a plug-in as the delay its built-in settings are dimmed");
     check (hasDetail (render (delay)), "and the view still renders");
     p.getEffectPlugins().useBuiltIn (PreDropAudioProcessor::EffectSlot::delay);
     delay.refresh();
-    check (delay.usesBuiltIn() && delay.knob (EffectSettings::delayFeedback)->isEnabled(), "back to the built-in they apply again");
+    check (delay.usesBuiltIn() && delay.knob (EffectSettings::Id::delayFeedback)->isEnabled(), "back to the built-in they apply again");
     delay.back().triggerClick();
     pumpMessages (30);
 
     // HIGH-PASS: the slope pill, and the pill in EFFECTS follows it.
     hpfPill->triggerClick();
     pumpMessages (30);
-    check (hpf.isVisible() && hpf.sourcePill() == nullptr && hpf.knob (EffectSettings::hpfResonance) != nullptr,
+    check (hpf.isVisible() && hpf.sourcePill() == nullptr && hpf.knob (EffectSettings::Id::hpfResonance) != nullptr,
            "the high-pass's pill opens its view (no source to choose)");
     hpf.slope().triggerClick();
     pumpMessages (30);
-    check (param (p, "hpfSlope") > 0.5f && p.getEffectSettings().hpfSteep(), "its slope pill switches to 24 dB");
+    check (param (p, "hpfSlope") > 0.5f && effectSettingsOf (p.getState()).hpfSteep(), "its slope pill switches to 24 dB");
     check (hasDetail (render (hpf)), "the high-pass view renders");
     hpf.back().triggerClick();
     check (pumpUntil ([&] { return hpfPill->getButtonText() == "24 dB" && hpfPill->getToggleState(); }),
@@ -1699,8 +1699,8 @@ void testEffectViews()
     auto* riserView = findChild<RiserView> (*editor);
     if (riserView != nullptr)
     {
-        auto* start = riserView->noiseKnob (EffectSettings::riserStart);
-        check (start != nullptr && start->isVisible() && riserView->noiseKnob (EffectSettings::riserResonance) != nullptr,
+        auto* start = riserView->noiseKnob (EffectSettings::Id::riserStart);
+        check (start != nullptr && start->isVisible() && riserView->noiseKnob (EffectSettings::Id::riserResonance) != nullptr,
                "the RISER view shows the noise's START, END and RESONANCE");
         const auto file = writeWav ("predrop view settings riser.wav", 48000.0, 2.0, 2);
         riserView->loadFile (file);

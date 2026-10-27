@@ -17,7 +17,7 @@ class SettingKnob : public juce::Component
 public:
     SettingKnob (juce::AudioProcessorValueTreeState& state, EffectSettings::Id settingId,
                  juce::Colour colour, juce::LookAndFeel& knobs, const juce::String& tooltip)
-        : id (settingId)
+        : id (settingId), valueColour (colour)
     {
         knob.setSliderStyle (juce::Slider::RotaryVerticalDrag);
         knob.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
@@ -32,7 +32,6 @@ public:
         knob.onValueChange = [this] { repaint(); };
         addAndMakeVisible (knob);
         setPaintingIsUnclipped (true);
-        valueColour = colour;
     }
 
     ~SettingKnob() override { knob.setLookAndFeel (nullptr); }

@@ -47,7 +47,7 @@ namespace
         const int length = audio.getNumSamples();
         for (int c = 0; c < outlineColumns; ++c)
         {
-            const int from = (int) ((juce::int64) length * c / outlineColumns);
+            const auto from = (int) ((juce::int64) length * c / outlineColumns);
             const int to   = juce::jmax (from + 1, (int) ((juce::int64) length * (c + 1) / outlineColumns));
             for (int ch = 0; ch < audio.getNumChannels(); ++ch)
             {
@@ -266,7 +266,7 @@ void RiserSource::renderInBackground()
     });
 }
 
-bool RiserSource::waitForRender (int timeoutMs)
+bool RiserSource::waitForRender (int timeoutMs) const
 {
     const auto until = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
     while (renderer.getNumJobs() > 0)
