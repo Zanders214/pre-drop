@@ -24,13 +24,13 @@ int main()
     // main's published controls, applying the track's effects) runs too; the
     // main then hands its high-pass, reverb and delay to it.
     PreDropAudioProcessor track;
-    track.setRole (PreDropAudioProcessor::Role::track);
+    track.getLink().setRole (PreDropAudioProcessor::Role::track);
     track.prepareToPlay (sr, bs);
     juce::AudioBuffer<float> trackBuffer (2, bs);
 
     // And one as a RETURN: the wet-only path a send / return track takes.
     PreDropAudioProcessor fxReturn;
-    fxReturn.setRole (PreDropAudioProcessor::Role::returnTrack);
+    fxReturn.getLink().setRole (PreDropAudioProcessor::Role::returnTrack);
     fxReturn.prepareToPlay (sr, bs);
     juce::AudioBuffer<float> returnBuffer (2, bs);
 
@@ -65,7 +65,7 @@ int main()
     {
         if (b == blocks / 2)
         {
-            const auto error = proc.loadRiserSample (riserFile);
+            const auto error = proc.getRiser().load (riserFile);
             if (error.isNotEmpty())
             {
                 std::printf ("FAIL: could not load the riser sample: %s\n", error.toRawUTF8());

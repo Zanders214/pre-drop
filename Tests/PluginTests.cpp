@@ -472,12 +472,12 @@ void testRiserSampleLoading()
     PreDropAudioProcessor p;
     p.prepareToPlay (48000.0, 512);
 
-    check (p.getRiserSampleName().isEmpty(), "the built-in noise riser is the default");
-    check (p.isSupportedRiserFile (riserFile) && ! p.isSupportedRiserFile (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("notes.txt")),
+    check (p.getRiser().getName().isEmpty(), "the built-in noise riser is the default");
+    check (p.getRiser().isSupportedFile (riserFile) && ! p.getRiser().isSupportedFile (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("notes.txt")),
            "audio files are accepted and other files are not");
 
-    const auto error = p.loadRiserSample (riserFile);
-    check (error.isEmpty() && p.getRiserSampleName() == "predrop-test-riser.wav",
+    const auto error = p.getRiser().load (riserFile);
+    check (error.isEmpty() && p.getRiser().getName() == "predrop-test-riser.wav",
            "a WAV loads as the riser (" + (error.isEmpty() ? juce::String ("ok") : error).toStdString() + ")");
 
     setParam (p, "amount", 1.0f);
@@ -491,7 +491,7 @@ void testRiserSampleLoading()
 
     PreDropAudioProcessor restored;
     restored.setStateInformation (state.getData(), (int) state.getSize());
-    check (restored.getRiserSampleName() == "predrop-test-riser.wav", "the riser sample is restored from the saved state");
+    check (restored.getRiser().getName() == "predrop-test-riser.wav", "the riser sample is restored from the saved state");
     restored.prepareToPlay (48000.0, 512);
     check (std::isfinite (settledChange (restored, 512, 10)), "a restored riser plays once the host prepares it");
 
@@ -500,22 +500,22 @@ void testRiserSampleLoading()
     juce::MemoryBlock noiseState;
     noiseOnly.getStateInformation (noiseState);
     restored.setStateInformation (noiseState.getData(), (int) noiseState.getSize());
-    check (restored.getRiserSampleName().isEmpty(), "restoring a noise-riser state goes back to noise");
+    check (restored.getRiser().getName().isEmpty(), "restoring a noise-riser state goes back to noise");
 
-    p.clearRiserSample();
-    check (p.getRiserSampleName().isEmpty(), "clearing goes back to the built-in noise");
+    p.getRiser().clear();
+    check (p.getRiser().getName().isEmpty(), "clearing goes back to the built-in noise");
 
     // Files that can't be used are refused with a reason, leaving the riser as it was.
     const auto silent  = writeWav ("predrop-test-silent.wav", 44100.0, 0.5, 1, true);
-    const auto tooLong = writeWav ("predrop-test-long.wav", 8000.0, PreDropAudioProcessor::maxRiserSeconds + 1.0, 1);
+    const auto tooLong = writeWav ("predrop-test-long.wav", 8000.0, RiserSource::maxSeconds + 1.0, 1);
     const auto text    = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-test.txt");
     text.replaceWithText ("not audio");
 
-    check (p.loadRiserSample (silent).contains ("silent"), "a silent file is refused");
-    check (p.loadRiserSample (tooLong).contains ("longer than"), "an over-long file is refused");
-    check (p.loadRiserSample (text).isNotEmpty(), "a non-audio file is refused");
-    check (p.loadRiserSample (juce::File ("/no/such/riser.wav")).contains ("could not be found"), "a missing file is refused");
-    check (p.getRiserSampleName().isEmpty(), "a refused file leaves the riser unchanged");
+    check (p.getRiser().load (silent).contains ("silent"), "a silent file is refused");
+    check (p.getRiser().load (tooLong).contains ("longer than"), "an over-long file is refused");
+    check (p.getRiser().load (text).isNotEmpty(), "a non-audio file is refused");
+    check (p.getRiser().load (juce::File ("/no/such/riser.wav")).contains ("could not be found"), "a missing file is refused");
+    check (p.getRiser().getName().isEmpty(), "a refused file leaves the riser unchanged");
 
     for (const auto& f : { silent, tooLong, text })
         f.deleteFile();
@@ -557,7 +557,7 @@ void testRiserSampleEditor()
 
     ed->fileDragEnter ({ riserFile.getFullPathName() }, 10, 10);
     ed->filesDropped ({ riserFile.getFullPathName() }, 10, 10);
-    check (p.getRiserSampleName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
+    check (p.getRiser().getName() == "predrop-editor-riser.wav", "dropping the file loads it as the riser");
     const auto label = riserButton->getButtonText();
     check (label.startsWith ("PRED") && label.endsWith (juce::String::charToString ((juce::juce_wchar) 0x2026)),
            "the button shows the sample's name, shortened to fit (" + label.toStdString() + ")");
@@ -565,7 +565,7 @@ void testRiserSampleEditor()
 
     // (The button's menu is a native popup window, which can't be opened
     // headlessly; its "Use built-in noise" item calls clearRiserSample.)
-    p.clearRiserSample();
+    p.getRiser().clear();
     check (pumpUntil ([&] { return riserButton->getButtonText() == "NOISE"; })
              && ! riserButton->getToggleState(),
            "going back to noise resets the button");
@@ -585,7 +585,8 @@ void testLinkHub()
 {
     std::printf ("Link hub:\n");
     LinkHub hub;
-    const int a = 0, b = 0;
+    const LinkHub::Member a;
+    const LinkHub::Member b;
 
     check (! hub.hasMain() && hub.claimMain (&a) && hub.isMain (&a), "the first instance to claim becomes the main");
     check (! hub.claimMain (&b) && ! hub.isMain (&b), "a second claim is refused while the main exists");
@@ -611,35 +612,35 @@ void testLinkedProcessing()
     // A TRACK with no main anywhere passes its audio through untouched.
     {
         PreDropAudioProcessor orphan;
-        orphan.setRole (Role::track);
+        orphan.getLink().setRole (Role::track);
         orphan.prepareToPlay (48000.0, 512);
         setParam (orphan, "amount", 1.0f);
         check (settledChange (orphan, 512, 20) == 0.0f, "a TRACK with no main passes audio through untouched");
     }
 
     PreDropAudioProcessor master;
-    check (master.getRole() == Role::main && master.isLinkMain(), "the first PreDrop is a MAIN and takes the link");
+    check (master.getLink().getRole() == Role::main && master.getLink().isMain(), "the first PreDrop is a MAIN and takes the link");
     master.prepareToPlay (48000.0, 512);
     setParam (master, "amount", 1.0f);
     setParam (master, "riserDepth", 0.0f);   // keeps the main's own output comparable
-    check (! master.getLinkHub().linkActive() && settledChange (master, 512, 40) > 0.05f,
+    check (! master.getLink().getHub().linkActive() && settledChange (master, 512, 40) > 0.05f,
            "with nothing linked the main processes the whole mix");
 
     // Adding PreDrop to tracks is all it takes: they join as TRACKs.
     PreDropAudioProcessor guitar, drums;
-    check (guitar.getRole() == Role::track && drums.getRole() == Role::track,
+    check (guitar.getLink().getRole() == Role::track && drums.getLink().getRole() == Role::track,
            "PreDrops added while a main exists join as TRACKs");
-    check (master.getLinkHub().getTracks().size() == 2 && master.getLinkHub().linkActive(), "they appear in the main's list");
-    check (guitar.getTrackName() == "Track 1" && drums.getTrackName() == "Track 2", "unnamed tracks are numbered");
+    check (master.getLink().getHub().getTracks().size() == 2 && master.getLink().getHub().linkActive(), "they appear in the main's list");
+    check (guitar.getLink().getTrackName() == "Track 1" && drums.getLink().getTrackName() == "Track 2", "unnamed tracks are numbered");
 
     drums.updateTrackProperties (hostTrack ("Drums"));
     guitar.updateTrackProperties (hostTrack ("Audio 3"));
-    guitar.setTrackName ("Guitar");
-    check (drums.getTrackName() == "Drums", "the host's track name is used");
-    check (guitar.getTrackName() == "Guitar", "a name typed into PreDrop wins over the host's");
+    guitar.getLink().setTrackName ("Guitar");
+    check (drums.getLink().getTrackName() == "Drums", "the host's track name is used");
+    check (guitar.getLink().getTrackName() == "Guitar", "a name typed into PreDrop wins over the host's");
 
     for (auto e : { Effect::hpf, Effect::reverb, Effect::delay })
-        drums.setLinkLevel (e, 0.0f);
+        drums.getLink().setLinkLevel (e, 0.0f);
 
     for (auto* p : { &guitar, &drums })
         p->prepareToPlay (48000.0, 512);
@@ -649,7 +650,7 @@ void testLinkedProcessing()
     check (settledChange (guitar, 512, 40) > 0.05f, "a track with its effects on follows the main's Amount");
     check (settledChange (drums, 512, 40) == 0.0f, "a track with every effect off is untouched");
 
-    drums.setLinkLevel (Effect::reverb, 1.0f);
+    drums.getLink().setLinkLevel (Effect::reverb, 1.0f);
     check (settledChange (drums, 512, 40) > 0.01f, "raising one effect's level for a track applies it");
 
     // A track's level is its share of the main's depth: two tracks fed the same
@@ -658,12 +659,12 @@ void testLinkedProcessing()
         PreDropAudioProcessor full, half;
         for (auto* p : { &full, &half })
         {
-            p->setRole (Role::track);
-            p->setLinkLevel (Effect::hpf, 0.0f);
-            p->setLinkLevel (Effect::delay, 0.0f);
+            p->getLink().setRole (Role::track);
+            p->getLink().setLinkLevel (Effect::hpf, 0.0f);
+            p->getLink().setLinkLevel (Effect::delay, 0.0f);
             p->prepareToPlay (48000.0, 512);
         }
-        half.setLinkLevel (Effect::reverb, 0.5f);
+        half.getLink().setLinkLevel (Effect::reverb, 0.5f);
         const float fullReverb = settledChange (full, 512, 60);
         const float halfReverb = settledChange (half, 512, 60);
         check (fullReverb > 0.01f && approx (halfReverb / fullReverb, 0.5f, 0.02f),
@@ -680,16 +681,16 @@ void testLinkedProcessing()
     drums.getStateInformation (state);
     PreDropAudioProcessor reloaded;
     reloaded.setStateInformation (state.getData(), (int) state.getSize());
-    check (reloaded.getRole() == Role::track && approx (reloaded.getLinkLevel (Effect::reverb), 1.0f, 1.0e-6f)
-             && approx (reloaded.getLinkLevel (Effect::delay), 0.0f, 1.0e-6f) && master.getLinkHub().getTracks().size() == 3,
+    check (reloaded.getLink().getRole() == Role::track && approx (reloaded.getLink().getLinkLevel (Effect::reverb), 1.0f, 1.0e-6f)
+             && approx (reloaded.getLink().getLinkLevel (Effect::delay), 0.0f, 1.0e-6f) && master.getLink().getHub().getTracks().size() == 3,
            "a reloaded TRACK relinks with its levels");
 
     // A second MAIN (chosen explicitly) works on its own until the first steps down.
     PreDropAudioProcessor second;
-    second.setRole (Role::main);
-    check (! second.isLinkMain(), "a second MAIN does not take over the link");
-    master.setRole (Role::track);
-    check (pumpUntil ([&] { return second.isLinkMain(); }), "when the main steps down, another MAIN takes the link");
+    second.getLink().setRole (Role::main);
+    check (! second.getLink().isMain(), "a second MAIN does not take over the link");
+    master.getLink().setRole (Role::track);
+    check (pumpUntil ([&] { return second.getLink().isMain(); }), "when the main steps down, another MAIN takes the link");
 }
 
 void testLinkingEditors()
@@ -699,10 +700,10 @@ void testLinkingEditors()
     using Effect = LinkHub::Effect;
 
     PreDropAudioProcessor master, guitar, keys;
-    guitar.setRole (Role::track);
-    keys.setRole (Role::track);
-    guitar.setTrackName ("Guitar");
-    keys.setTrackName ("Keys");
+    guitar.getLink().setRole (Role::track);
+    keys.getLink().setRole (Role::track);
+    guitar.getLink().setTrackName ("Guitar");
+    keys.getLink().setTrackName ("Keys");
     setParam (master, "amount", 0.7f);
 
     std::unique_ptr<juce::AudioProcessorEditor> mainEditor (master.createEditor());
@@ -726,33 +727,33 @@ void testLinkingEditors()
     check (hasDetail (render (*matrix)), "the panel lists the linked tracks");
 
     click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
-    check (guitar.getLinkLevel (Effect::reverb) == 0.0f && keys.getLinkLevel (Effect::reverb) == 1.0f,
+    check (guitar.getLink().getLinkLevel (Effect::reverb) == 0.0f && keys.getLink().getLinkLevel (Effect::reverb) == 1.0f,
            "clicking a track's REV level turns reverb off for that track only");
     click (*matrix, matrix->cell (1, Effect::reverb).getCentre());
-    check (guitar.getLinkLevel (Effect::reverb) == 1.0f, "clicking it again brings it back to 100%");
+    check (guitar.getLink().getLinkLevel (Effect::reverb) == 1.0f, "clicking it again brings it back to 100%");
 
     // Dragging a cell down by 30 px (half the 60 px travel) sets it to 50%.
     const auto delayCell = matrix->cell (1, Effect::delay).getCentre();
     matrix->mouseDown (mouseAt (*matrix, delayCell, false));
     matrix->mouseDrag (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
     matrix->mouseUp (mouseAt (*matrix, delayCell.translated (0.0f, 30.0f), true, delayCell));
-    check (approx (guitar.getLinkLevel (Effect::delay), 0.5f, 0.02f) && keys.getLinkLevel (Effect::delay) == 1.0f,
+    check (approx (guitar.getLink().getLinkLevel (Effect::delay), 0.5f, 0.02f) && keys.getLink().getLinkLevel (Effect::delay) == 1.0f,
            "dragging a track's DLY level sets it (to "
-             + std::to_string (guitar.getLinkLevel (Effect::delay)).substr (0, 4) + ")");
+             + std::to_string (guitar.getLink().getLinkLevel (Effect::delay)).substr (0, 4) + ")");
     matrix->mouseDoubleClick (mouseAt (*matrix, delayCell, false, std::nullopt, 2));
-    check (guitar.getLinkLevel (Effect::delay) == 1.0f, "double-clicking a level resets it to 100%");
+    check (guitar.getLink().getLinkLevel (Effect::delay) == 1.0f, "double-clicking a level resets it to 100%");
 
     click (*matrix, matrix->cell (0, Effect::delay).getCentre());
-    check (guitar.getLinkLevel (Effect::delay) == 0.0f && keys.getLinkLevel (Effect::delay) == 0.0f,
+    check (guitar.getLink().getLinkLevel (Effect::delay) == 0.0f && keys.getLink().getLinkLevel (Effect::delay) == 0.0f,
            "clicking ALL turns a column off for every track");
     click (*matrix, matrix->cell (0, Effect::delay).getCentre());
-    check (guitar.getLinkLevel (Effect::delay) == 1.0f && keys.getLinkLevel (Effect::delay) == 1.0f, "and back to 100%");
+    check (guitar.getLink().getLinkLevel (Effect::delay) == 1.0f && keys.getLink().getLinkLevel (Effect::delay) == 1.0f, "and back to 100%");
 
     const auto allHpf = matrix->cell (0, Effect::hpf).getCentre();
     matrix->mouseDown (mouseAt (*matrix, allHpf, false));
     matrix->mouseDrag (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
     matrix->mouseUp (mouseAt (*matrix, allHpf.translated (0.0f, 45.0f), true, allHpf));
-    check (approx (guitar.getLinkLevel (Effect::hpf), 0.25f, 0.02f) && approx (keys.getLinkLevel (Effect::hpf), 0.25f, 0.02f),
+    check (approx (guitar.getLink().getLinkLevel (Effect::hpf), 0.25f, 0.02f) && approx (keys.getLink().getLinkLevel (Effect::hpf), 0.25f, 0.02f),
            "dragging ALL sets a column for every track");
     matrix->refresh();
     check (hasDetail (render (*mainEditor)), "the main renders with the tracks list");
@@ -760,7 +761,7 @@ void testLinkingEditors()
     // More tracks than fit: the list scrolls with the mouse wheel.
     std::array<PreDropAudioProcessor, 3> more;
     for (auto& extra : more)
-        extra.setRole (Role::track);
+        extra.getLink().setRole (Role::track);
     matrix->refresh();
     const auto top = render (*matrix);
     juce::MouseWheelDetails wheel {};
@@ -770,13 +771,13 @@ void testLinkingEditors()
 
     // A second MAIN explains that another instance holds the link.
     PreDropAudioProcessor otherMain;
-    otherMain.setRole (Role::main);
+    otherMain.getLink().setRole (Role::main);
     std::unique_ptr<juce::AudioProcessorEditor> otherEditor (otherMain.createEditor());
     if (auto* otherMatrix = findChild<TrackMatrix> (*otherEditor))
     {
         otherMatrix->setBounds (matrix->getBounds());
         click (*otherMatrix, otherMatrix->cell (1, Effect::reverb).getCentre());
-        check (guitar.getLinkLevel (Effect::reverb) == 1.0f && hasDetail (render (*otherMatrix)),
+        check (guitar.getLink().getLinkLevel (Effect::reverb) == 1.0f && hasDetail (render (*otherMatrix)),
                "a MAIN that isn't the link shows why and ignores clicks");
     }
 
@@ -793,10 +794,10 @@ void testLinkingEditors()
     check (panel->nameLabel().getText() == "Guitar", "a TRACK shows its name");
 
     panel->nameLabel().setText ("Lead Guitar", juce::sendNotificationSync);
-    check (guitar.getTrackName() == "Lead Guitar", "renaming in the panel renames the track in the main's list");
+    check (guitar.getLink().getTrackName() == "Lead Guitar", "renaming in the panel renames the track in the main's list");
 
     panel->levelKnob (Effect::reverb).setValue (0.3, juce::sendNotificationSync);
-    check (approx (guitar.getLinkLevel (Effect::reverb), 0.3f, 1.0e-3f), "a TRACK's own REVERB knob sets its level");
+    check (approx (guitar.getLink().getLinkLevel (Effect::reverb), 0.3f, 1.0e-3f), "a TRACK's own REVERB knob sets its level");
     setParam (guitar, "trackDelay", 0.6f);
     check (pumpUntil ([&] { return std::abs (panel->levelKnob (Effect::delay).getValue() - 0.6) < 1.0e-3; }),
            "a level changed from the main moves the TRACK's knob");
@@ -804,17 +805,17 @@ void testLinkingEditors()
 
     // Changing the role (the pill opens a native menu, chosen here directly)
     // swaps the face over on the editor's next tick.
-    master.setRole (Role::track);
+    master.getLink().setRole (Role::track);
     check (pumpUntil ([&] { return roleButton->getButtonText() == "TRACK"; })
              && findChild<TrackPanel> (*mainEditor)->isVisible() && ! tracksButton->isVisible(),
            "becoming a TRACK swaps to the track face");
-    master.setRole (Role::returnTrack);
+    master.getLink().setRole (Role::returnTrack);
     check (pumpUntil ([&] { return roleButton->getButtonText() == "RETURN"; })
              && findChild<TrackPanel> (*mainEditor)->isVisible() && ! findChild<TrackPanel> (*mainEditor)->nameLabel().isVisible()
              && ! findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
            "becoming a RETURN shows the sends panel, with Mix locked to wet");
     check (hasDetail (render (*mainEditor)), "a RETURN renders its face");
-    master.setRole (Role::main);
+    master.getLink().setRole (Role::main);
     check (pumpUntil ([&] { return roleButton->getButtonText() == "MAIN"; })
              && tracksButton->isVisible() && findChildren<juce::Slider> (*mainEditor)[1]->isEnabled(),
            "and back to MAIN");
@@ -828,15 +829,15 @@ void testReturnRole()
 
     // With no main yet, a RETURN is silent.
     PreDropAudioProcessor fx;
-    fx.setRole (Role::returnTrack);
+    fx.getLink().setRole (Role::returnTrack);
     fx.prepareToPlay (48000.0, 512);
-    auto& hub = fx.getLinkHub();
-    check (fx.followsMain() && hub.numReturns() == 1 && hub.getTracks().empty(),
+    auto& hub = fx.getLink().getHub();
+    check (fx.getLink().followsMain() && hub.numReturns() == 1 && hub.getTracks().empty(),
            "a RETURN links as a return, not as a row in the track list");
     check (settledOutputRms (fx, 512, 40) == 0.0f, "with no main a return is silent");
 
     PreDropAudioProcessor master;
-    check (master.isLinkMain() && hub.linkActive(), "a MAIN added later takes the link with the return on it");
+    check (master.getLink().isMain() && hub.linkActive(), "a MAIN added later takes the link with the return on it");
     master.prepareToPlay (48000.0, 512);
     setParam (master, "amount", 1.0f);
     check (settledOutputRms (fx, 512, 60) > 0.01f, "linked, a return adds reverb and delay to what is sent");
@@ -844,8 +845,8 @@ void testReturnRole()
     // Wet only: the send itself never comes out of the return, even with Mix down.
     setParam (fx, "mix", 0.0f);
     check (settledChange (fx, 512, 40) > 0.1f, "a return ignores Mix: it stays fully wet");
-    fx.setLinkLevel (Effect::reverb, 0.0f);
-    fx.setLinkLevel (Effect::delay, 0.0f);
+    fx.getLink().setLinkLevel (Effect::reverb, 0.0f);
+    fx.getLink().setLinkLevel (Effect::delay, 0.0f);
     settledOutputRms (fx, 512, 10);   // let the ramps settle to off
     check (settledOutputRms (fx, 512, 20) == 0.0f, "with its reverb and delay at 0 a return is silent: no dry leaks through");
 
@@ -853,9 +854,9 @@ void testReturnRole()
     fx.getStateInformation (state);
     PreDropAudioProcessor reloaded;
     reloaded.setStateInformation (state.getData(), (int) state.getSize());
-    check (reloaded.getRole() == Role::returnTrack && hub.numReturns() == 2, "a reloaded RETURN relinks");
+    check (reloaded.getLink().getRole() == Role::returnTrack && hub.numReturns() == 2, "a reloaded RETURN relinks");
 
-    fx.setRole (Role::main);
+    fx.getLink().setRole (Role::main);
     check (hub.numReturns() == 1, "switching a RETURN to another role unlinks it");
 
     // The main's panel says how many returns are linked.
@@ -872,7 +873,7 @@ void testEmptyTrackList()
     TrackMatrix matrix (master);
     matrix.setBounds (0, 0, 308, 114);
     matrix.refresh();
-    check (! master.getLinkHub().linkActive() && hasDetail (render (matrix)),
+    check (! master.getLink().getHub().linkActive() && hasDetail (render (matrix)),
            "with nothing linked the panel says the whole mix is processed, and how to pick tracks");
 }
 
@@ -918,24 +919,24 @@ void testEffectPlugins()
     for (auto* id : { "hpfDepth", "delayDepth", "riserDepth" })
         setParam (p, id, 0.0f);
 
-    check (p.getEffectPluginName (Slot::reverb).isEmpty() && p.getEffectPluginName (Slot::delay).isEmpty(),
+    check (p.getEffectPlugins().getName (Slot::reverb).isEmpty() && p.getEffectPlugins().getName (Slot::delay).isEmpty(),
            "reverb and delay start as the built-in effects");
 
-    const auto error = p.loadEffectPlugin (Slot::reverb, vst3);
-    check (error.isEmpty() && p.getEffectPluginName (Slot::reverb) == "ZandersPreDrop",
+    const auto error = p.getEffectPlugins().load (Slot::reverb, vst3);
+    check (error.isEmpty() && p.getEffectPlugins().getName (Slot::reverb) == "ZandersPreDrop",
            "a VST3 loads into the reverb slot (" + (error.isEmpty() ? juce::String ("ok") : error).toStdString() + ")");
 
     const float deviation = deviationFrom (p, 1.5f, 40);
     check (deviation < 1.0e-4f, "the plug-in comes in at the calibrated reverb level: dry + 0.5 x its output (off by "
                                   + std::to_string (deviation) + ")");
-    check (p.effectPluginLeaksDry (Slot::reverb), "a plug-in passing its dry signal through is flagged (set it to 100% wet)");
+    check (p.getEffectPlugins().leaksDry (Slot::reverb), "a plug-in passing its dry signal through is flagged (set it to 100% wet)");
 
     // Saved with the set, plug-in settings included.
     juce::MemoryBlock state;
     p.getStateInformation (state);
     PreDropAudioProcessor reopened;
     reopened.setStateInformation (state.getData(), (int) state.getSize());
-    check (reopened.getEffectPluginName (Slot::reverb) == "ZandersPreDrop" && reopened.getEffectPluginName (Slot::delay).isEmpty(),
+    check (reopened.getEffectPlugins().getName (Slot::reverb) == "ZandersPreDrop" && reopened.getEffectPlugins().getName (Slot::delay).isEmpty(),
            "a reopened set has its plug-in back");
 
     // On a computer without the plug-in: the built-in plays, and the plug-in's
@@ -952,7 +953,7 @@ void testEffectPlugins()
     juce::AudioProcessor::copyXmlToBinary (*xml, elsewhereState);
     PreDropAudioProcessor elsewhere;
     elsewhere.setStateInformation (elsewhereState.getData(), (int) elsewhereState.getSize());
-    check (elsewhere.getEffectPluginName (Slot::reverb).isEmpty() && elsewhere.getMissingEffectPluginName (Slot::reverb) == "ZandersPreDrop",
+    check (elsewhere.getEffectPlugins().getName (Slot::reverb).isEmpty() && elsewhere.getEffectPlugins().getMissingName (Slot::reverb) == "ZandersPreDrop",
            "a plug-in that isn't installed falls back to the built-in, named as missing");
     juce::MemoryBlock resaved;
     elsewhere.getStateInformation (resaved);
@@ -961,23 +962,23 @@ void testEffectPlugins()
            "saving there keeps the missing plug-in and its settings");
 
     // The delay slot works the same way, and either goes back to built-in.
-    check (p.loadEffectPlugin (Slot::delay, vst3).isEmpty() && p.getEffectPluginName (Slot::delay) == "ZandersPreDrop",
+    check (p.getEffectPlugins().load (Slot::delay, vst3).isEmpty() && p.getEffectPlugins().getName (Slot::delay) == "ZandersPreDrop",
            "a VST3 loads into the delay slot too");
-    p.useBuiltInEffect (Slot::reverb);
-    p.useBuiltInEffect (Slot::delay);
-    check (p.getEffectPluginName (Slot::reverb).isEmpty() && p.getEffectPluginName (Slot::delay).isEmpty(),
+    p.getEffectPlugins().useBuiltIn (Slot::reverb);
+    p.getEffectPlugins().useBuiltIn (Slot::delay);
+    check (p.getEffectPlugins().getName (Slot::reverb).isEmpty() && p.getEffectPlugins().getName (Slot::delay).isEmpty(),
            "both slots go back to the built-in effects");
 
     const auto text = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("predrop-not-a-plugin.txt");
     text.replaceWithText ("not a plug-in");
-    check (p.loadEffectPlugin (Slot::reverb, text).isNotEmpty() && p.getEffectPluginName (Slot::reverb).isEmpty(),
+    check (p.getEffectPlugins().load (Slot::reverb, text).isNotEmpty() && p.getEffectPlugins().getName (Slot::reverb).isEmpty(),
            "a file that isn't a plug-in is refused, leaving the built-in");
-    check (p.loadEffectPlugin (Slot::reverb, juce::File ("/no/such/Plugin.vst3")).contains ("could not be found"),
+    check (p.getEffectPlugins().load (Slot::reverb, juce::File ("/no/such/Plugin.vst3")).contains ("could not be found"),
            "a missing file is refused");
     text.deleteFile();
 
     // The EFFECTS panel's slot pills show what is loaded.
-    p.loadEffectPlugin (Slot::reverb, vst3);
+    p.getEffectPlugins().load (Slot::reverb, vst3);
     std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
     std::vector<EffectSlotButton*> pills;
     for (auto* child : editor->getChildren())
@@ -992,20 +993,20 @@ void testEffectPlugins()
                  && pills[1]->getButtonText() == "BUILT-IN",
                "they show the loaded plug-in and the built-in one (" + pills[0]->getButtonText().toStdString() + ")");
     }
-    check (juce::File::isAbsolutePath (vst3.getFullPathName()) && ! PreDropAudioProcessor::findInstalledVst3Plugins().contains (vst3),
+    check (juce::File::isAbsolutePath (vst3.getFullPathName()) && ! EffectPlugins::findInstalledVst3().contains (vst3),
            "PreDrop itself is left out of the plug-in list");
 
     if (pills.size() == 2)
     {
         // Picking from the pill's menu (acted on directly; the menu is a native window).
         pills[1]->loadPlugin (vst3, false);
-        check (p.getEffectPluginName (Slot::delay) == "ZandersPreDrop" && pills[1]->getToggleState(),
+        check (p.getEffectPlugins().getName (Slot::delay) == "ZandersPreDrop" && pills[1]->getToggleState(),
                "loading from the DLY pill puts the plug-in in the delay slot");
         pills[1]->choose (EffectSlotButton::builtInId);
-        check (p.getEffectPluginName (Slot::delay).isEmpty() && pills[1]->getButtonText() == "BUILT-IN",
+        check (p.getEffectPlugins().getName (Slot::delay).isEmpty() && pills[1]->getButtonText() == "BUILT-IN",
                "choosing Built-in from the menu goes back to the built-in delay");
         pills[1]->choose (EffectSlotButton::firstPluginId + 9999);
-        check (p.getEffectPluginName (Slot::delay).isEmpty(), "a stale menu choice does nothing");
+        check (p.getEffectPlugins().getName (Slot::delay).isEmpty(), "a stale menu choice does nothing");
 
         // The menu: Built-in ticked while nothing is loaded, plus a window item once one is.
         const auto itemIds = [] (juce::PopupMenu menu)
@@ -1066,17 +1067,17 @@ void testEffectPluginHostIntegration()
     // PreDrop gets from the host is handed to its plug-ins as it processes.
     PreDropAudioProcessor p;
     p.prepareToPlay (48000.0, 512);
-    p.loadEffectPlugin (Slot::delay, vst3);
+    p.getEffectPlugins().load (Slot::delay, vst3);
     FixedTempoPlayHead hostPlayHead;
     p.setPlayHead (&hostPlayHead);
     juce::AudioBuffer<float> buffer (2, 512);
     buffer.clear();
     juce::MidiBuffer midi;
     p.processBlock (buffer, midi);
-    auto* hosted = p.getEffectPluginInstance (Slot::delay);
+    auto* hosted = p.getEffectPlugins().getInstance (Slot::delay);
     check (hosted != nullptr && hosted->getPlayHead() == &hostPlayHead,
            "a hosted plug-in gets the host's playhead (tempo, position, transport)");
-    check (p.getEffectPluginInstance (Slot::reverb) == nullptr, "an empty slot has no plug-in instance");
+    check (p.getEffectPlugins().getInstance (Slot::reverb) == nullptr, "an empty slot has no plug-in instance");
 
     // Hosts may restore a project on a worker thread. Plug-ins and their
     // windows belong to the message thread, so the slot is restored there.
@@ -1085,9 +1086,9 @@ void testEffectPluginHostIntegration()
     PreDropAudioProcessor restored;
     std::thread worker ([&] { restored.setStateInformation (state.getData(), (int) state.getSize()); });
     worker.join();
-    check (restored.getEffectPluginName (Slot::delay).isEmpty(),
+    check (restored.getEffectPlugins().getName (Slot::delay).isEmpty(),
            "restoring on a worker thread doesn't create the plug-in there");
-    check (pumpUntil ([&] { return restored.getEffectPluginName (Slot::delay) == "ZandersPreDrop"; }),
+    check (pumpUntil ([&] { return restored.getEffectPlugins().getName (Slot::delay) == "ZandersPreDrop"; }),
            "the message thread loads it right after");
 }
 

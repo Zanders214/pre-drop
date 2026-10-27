@@ -80,7 +80,7 @@ private:
         // drop the leading outputs.
         const auto latency  = (int) std::ceil (juce::WindowedSincInterpolator::getBaseLatency());
         const int  outLength = juce::jmax (1, (int) ((double) inLength / ratio));
-        const int  skip      = (int) std::lround ((double) latency / ratio);
+        const auto skip      = (int) std::lround ((double) latency / ratio);
 
         juce::AudioBuffer<float> padded (1, inLength + 2 * latency + 8);
         juce::AudioBuffer<float> out (channels, outLength);

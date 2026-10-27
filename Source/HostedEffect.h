@@ -117,7 +117,9 @@ private:
         const int latency = juce::jlimit (0, maxLatency, plugin->getLatencySamples());
         const float* in   = history.getReadPointer (0);
 
-        double cross = 0.0, inEnergy = 0.0, outEnergy = 0.0;
+        double cross     = 0.0;
+        double inEnergy  = 0.0;
+        double outEnergy = 0.0;
         for (int n = 0; n < numSamples; ++n)
         {
             const float x = in[((blockStart + n - latency) % size + size) % size];
@@ -149,7 +151,7 @@ private:
 
 /** A plug-in's own editor in a window of its own, floating over the host.
     Closing it only hides it; it is deleted before its plug-in is. */
-class EffectPluginWindow : public juce::DocumentWindow
+class EffectPluginWindow final : public juce::DocumentWindow
 {
 public:
     EffectPluginWindow (juce::AudioPluginInstance& plugin, const juce::String& title, std::function<void()> onCloseRequest)
@@ -157,11 +159,12 @@ public:
           onClose (std::move (onCloseRequest))
     {
         setUsingNativeTitleBar (true);
-        juce::AudioProcessorEditor* editor = plugin.hasEditor() ? plugin.createEditorIfNeeded() : nullptr;
+        std::unique_ptr<juce::AudioProcessorEditor> editor (plugin.hasEditor() ? plugin.createEditorIfNeeded() : nullptr);
         if (editor == nullptr)
-            editor = new juce::GenericAudioProcessorEditor (plugin);
-        setContentOwned (editor, true);
-        setResizable (editor->isResizable(), false);
+            editor = std::make_unique<juce::GenericAudioProcessorEditor> (plugin);
+        const bool resizable = editor->isResizable();
+        setContentOwned (editor.release(), true);   // the window owns its editor from here
+        setResizable (resizable, false);
         setAlwaysOnTop (true);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);

@@ -120,6 +120,10 @@ ctest --test-dir build --output-on-failure
 ```
 Source/
   PluginProcessor.{h,cpp}    thin host wrapper + parameters (APVTS)
+  ParamIDs.h                 the parameter IDs
+  RiserSource.{h,cpp}        the riser sample: loading, saving with the set, feeding the engine
+  TrackLink.{h,cpp}          this instance's role (MAIN / TRACK / RETURN) and its place in the link
+  EffectPlugins.{h,cpp}      the VST3 reverb / delay slots: loading, saving, windows, audio hand-over
   PluginEditor.{h,cpp}       "Neon Clean" editor: knob + chips + curve + sliders
   PreDropLookAndFeel.{h,cpp} custom knob (gradient ring) and Mix/Output sliders
   EffectChips.h              HPF/REV/DLY/RIS status chips (read-only indicators)

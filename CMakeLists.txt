@@ -52,7 +52,10 @@ juce_generate_juce_header(PreDrop)
 set(PREDROP_APP_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/PreDropLookAndFeel.cpp)
+    Source/PreDropLookAndFeel.cpp
+    Source/EffectPlugins.cpp
+    Source/RiserSource.cpp
+    Source/TrackLink.cpp)
 
 target_sources(PreDrop PRIVATE ${PREDROP_APP_SOURCES})
 

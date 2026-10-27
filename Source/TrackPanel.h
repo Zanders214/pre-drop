@@ -43,7 +43,7 @@ public:
         name.setTooltip ("This track's name in the main's TRACKS list. Double-click to rename; clear it to use the track's own name.");
         name.onTextChange = [this]
         {
-            processor.setTrackName (name.getText());
+            processor.getLink().setTrackName (name.getText());
             refresh();
         };
         addAndMakeVisible (name);
@@ -82,8 +82,8 @@ public:
     /** Updates the status and name. Called from the editor's timer. */
     void refresh()
     {
-        if (! name.isBeingEdited() && name.getText() != processor.getTrackName())
-            name.setText (processor.getTrackName(), juce::dontSendNotification);
+        if (! name.isBeingEdited() && name.getText() != processor.getLink().getTrackName())
+            name.setText (processor.getLink().getTrackName(), juce::dontSendNotification);
         reverbSlot.refresh();
         delaySlot.refresh();
 
@@ -116,7 +116,7 @@ public:
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 12.0f * s);
 
         const auto [title, detail] = statusLines();
-        const bool linked = processor.getLinkHub().linkActive();
+        const bool linked = processor.getLink().getHub().linkActive();
         auto area = getLocalBounds().toFloat().reduced (12.0f * s, 10.0f * s);
 
         g.setFont (Fonts::sans (10.0f * s, true, 0.12f));
@@ -195,8 +195,7 @@ private:
 
     std::pair<juce::String, juce::String> statusLines() const
     {
-        const auto& hub = processor.getLinkHub();
-        if (! hub.linkActive())
+        if (const auto& hub = processor.getLink().getHub(); ! hub.linkActive())
             return { "NOT LINKED", "Add PreDrop to your master (it becomes the MAIN) to link up." };
         if (returnMode)
             return { "LINKED AS A RETURN", "Adds reverb and delay, wet only, to what tracks send here." };

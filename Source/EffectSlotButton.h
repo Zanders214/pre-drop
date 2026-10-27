@@ -17,12 +17,12 @@
     warns (amber, with a tooltip) when a saved plug-in isn't installed here, or
     when the loaded one seems to pass its dry signal through.
 */
-class EffectSlotButton : public juce::TextButton
+class EffectSlotButton final : public juce::TextButton
 {
 public:
     using Slot = PreDropAudioProcessor::EffectSlot;
 
-    EffectSlotButton (PreDropAudioProcessor& p, Slot s, juce::LookAndFeel& pills) : processor (p), slot (s)
+    EffectSlotButton (PreDropAudioProcessor& p, Slot s, juce::LookAndFeel& pills) : plugins (p.getEffectPlugins()), slot (s)
     {
         setLookAndFeel (&pills);
         PreDropLookAndFeel::setCompactPill (*this);
@@ -36,9 +36,9 @@ public:
     /** Updates the label and warnings. Called from the editor's timer. */
     void refresh()
     {
-        const auto name    = processor.getEffectPluginName (slot);
-        const auto missing = processor.getMissingEffectPluginName (slot);
-        const bool leaks   = processor.effectPluginLeaksDry (slot);
+        const auto name    = plugins.getName (slot);
+        const auto missing = plugins.getMissingName (slot);
+        const bool leaks   = plugins.leaksDry (slot);
 
         // Warnings are short to fit the pill; the tooltip says the rest.
         juce::String label = name.isNotEmpty() ? name.toUpperCase() : juce::String ("BUILT-IN");
@@ -86,9 +86,9 @@ public:
     void choose (int itemId)
     {
         if (itemId == builtInId)
-            processor.useBuiltInEffect (slot);
+            plugins.useBuiltIn (slot);
         else if (itemId == windowId)
-            processor.showEffectPluginWindow (slot);
+            plugins.showWindow (slot);
         else if (itemId == browseId)
             browse();
         else if (itemId >= firstPluginId && itemId - firstPluginId < installed.size())
@@ -100,10 +100,10 @@ public:
         opens its window straight away so its sound can be shaped. */
     void loadPlugin (const juce::File& plugin, bool openWindow = true)
     {
-        if (const auto error = processor.loadEffectPlugin (slot, plugin); error.isNotEmpty())
+        if (const auto error = plugins.load (slot, plugin); error.isNotEmpty())
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Couldn't use that plug-in", error);
         else if (openWindow)
-            processor.showEffectPluginWindow (slot);
+            plugins.showWindow (slot);
         refresh();
     }
 
@@ -112,16 +112,16 @@ public:
     juce::PopupMenu buildMenu()
     {
         const juce::String kind = slot == Slot::reverb ? "reverb" : "delay";
-        const auto loaded = processor.getEffectPluginName (slot);
-        installed = PreDropAudioProcessor::findInstalledVst3Plugins();
+        const auto loaded = plugins.getName (slot);
+        installed = EffectPlugins::findInstalledVst3();
 
-        juce::PopupMenu plugins;
+        juce::PopupMenu installedMenu;
         for (int i = 0; i < installed.size(); ++i)
-            plugins.addItem (firstPluginId + i, installed[i].getFileNameWithoutExtension());
+            installedMenu.addItem (firstPluginId + i, installed[i].getFileNameWithoutExtension());
 
         juce::PopupMenu menu;
         menu.addItem (builtInId, "Built-in " + kind, true, loaded.isEmpty());
-        menu.addSubMenu ("Your VST3 plug-ins", plugins, ! installed.isEmpty());
+        menu.addSubMenu ("Your VST3 plug-ins", installedMenu, ! installed.isEmpty());
         menu.addItem (browseId, "Browse for a VST3...");
         if (loaded.isNotEmpty())
         {
@@ -163,7 +163,7 @@ private:
         });
     }
 
-    PreDropAudioProcessor&             processor;
+    EffectPlugins&                     plugins;
     Slot                               slot;
     juce::Array<juce::File>            installed;
     std::unique_ptr<juce::FileChooser> chooser;
