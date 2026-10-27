@@ -115,8 +115,27 @@ public:
         });
     }
 
-    /** The name dialog while it's open (for tests). */
-    juce::AlertWindow* getNameDialog() noexcept { return nameDialog.get(); }
+    /** Builds the name dialog, offering the current name (askForName() shows
+        it); finishNaming() closes it, saving on 1. Apart for tests, which
+        can't put a window on a screen-less runner. */
+    juce::AlertWindow& startNaming()
+    {
+        nameDialog = std::make_unique<juce::AlertWindow> ("Save preset", "Name this sound:", juce::MessageBoxIconType::NoIcon, this);
+        nameDialog->addTextEditor ("name", shownName);
+        nameDialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        nameDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        return *nameDialog;
+    }
+
+    void finishNaming (int result)
+    {
+        if (nameDialog == nullptr)
+            return;
+        const auto name = nameDialog->getTextEditorContents ("name");
+        nameDialog.reset();
+        if (result == 1)
+            saveAs (name);
+    }
 
 private:
     void fitLabel()
@@ -138,18 +157,10 @@ private:
 
     void askForName()
     {
-        nameDialog = std::make_unique<juce::AlertWindow> ("Save preset", "Name this sound:", juce::MessageBoxIconType::NoIcon, this);
-        nameDialog->addTextEditor ("name", shownName);
-        nameDialog->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        nameDialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        nameDialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer (this)] (int result)
+        startNaming().enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer (this)] (int result)
         {
-            if (safe == nullptr || safe->nameDialog == nullptr)
-                return;
-            const auto name = safe->nameDialog->getTextEditorContents ("name");
-            safe->nameDialog.reset();
-            if (result == 1)
-                safe->saveAs (name);
+            if (safe != nullptr)
+                safe->finishNaming (result);
         }), false);
     }
 

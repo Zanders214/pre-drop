@@ -1842,15 +1842,15 @@ void testPresets()
         pill->saveAs ("From The Pill");
         check (presets.fileFor ("From The Pill").existsAsFile() && presets.getCurrentName() == "From The Pill", "the pill saves under a new name");
 
-        pill->choose (PresetButton::saveId);
-        auto* dialog = pill->getNameDialog();
-        check (dialog != nullptr && dialog->getTextEditorContents ("name") == "From The Pill", "Save preset... asks for a name, offering the current one");
-        if (dialog != nullptr)
-        {
-            dialog->getTextEditor ("name")->setText ("Typed Name");
-            dialog->exitModalState (1);
-            check (pumpUntil ([&] { return presets.fileFor ("Typed Name").existsAsFile(); }), "and saves under the name typed");
-        }
+        // Save preset...'s dialog, built without showing it (CI has no window manager).
+        auto& dialog = pill->startNaming();
+        check (dialog.getTextEditorContents ("name") == "From The Pill", "Save preset... asks for a name, offering the current one");
+        dialog.getTextEditor ("name")->setText ("Typed Name");
+        pill->finishNaming (1);
+        check (presets.fileFor ("Typed Name").existsAsFile() && presets.getCurrentName() == "Typed Name", "and saves under the name typed");
+        pill->startNaming().getTextEditor ("name")->setText ("Cancelled");
+        pill->finishNaming (0);
+        check (! presets.fileFor ("Cancelled").existsAsFile(), "Cancel saves nothing");
 
         setParam (p, "role", 1.0f);
         check (pumpUntil ([&] { return ! pill->isVisible(); }), "a TRACK has no presets (its sound is the main's)");
