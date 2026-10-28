@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793146358756,
+  "lastUpdate": 1793181258025,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -611,6 +611,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.506,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80945f0107bf086abe290ddcb92b7a59757505ac",
+          "message": "Merge pull request #22 from Zanders214/claude/downlifter-tails\n\nLet the downlifter keep as much of the reverb and delay as you choose",
+          "timestamp": "2026-10-28T10:52:51+01:00",
+          "tree_id": "7d6314d37bb079a2381c630fe2f157d12d99522c",
+          "url": "https://github.com/Zanders214/pre-drop/commit/80945f0107bf086abe290ddcb92b7a59757505ac"
+        },
+        "date": 1793181257314,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 37506.292,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.352,
             "unit": "%"
           }
         ]
