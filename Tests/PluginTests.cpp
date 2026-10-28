@@ -231,6 +231,14 @@ void testProcessorBasics()
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
     check (p.getParameters().size() == 11 + (int) EffectSettings::count, "32 parameters are exposed (11, and the effects' settings)");
+    {
+        // AU hosts order parameters by version: later ones get higher versions
+        // so automation saved before them still finds the right controls.
+        const auto version = [&p] (const char* id) { return p.getState().getParameter (id)->getVersionHint(); };
+        check (version ("amount") == 1 && version ("riserResonance") == 1 && version ("dropOn") == 2 && version ("dropEnd") == 2
+                 && version ("dropReverb") == 3 && version ("dropDelay") == 3,
+               "parameter versions: 1 for the first, 2 for the downlifter, 3 for its REVERB and DELAY");
+    }
     check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
