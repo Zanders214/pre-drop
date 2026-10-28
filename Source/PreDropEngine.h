@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 
+#include "DropRelease.h"
 #include "EffectSettings.h"
 #include "MacroMapping.h"
 #include "RiserVoice.h"
@@ -60,9 +61,10 @@ inline bool runOrIdle (bool& isIdle, bool settledOff, Reset&& resetEffect)
     level, so the balance holds on quiet and loud material alike. The riser is
     band-passed noise by default; setRiserSample swaps in a looping user sample
     at the same calibrated level. Reverb and delay can likewise be swapped for
-    external effects (hosted plugins) via setExternalEffects. The mapping
-    from the macro to each effect's targets lives in MacroMapping, and the
-    riser in RiserVoice.
+    external effects (hosted plugins) via setExternalEffects. After the drop,
+    DropRelease plays the downlifter: the riser falls and the reverb and delay
+    ring out. The mapping from the macro to each effect's targets lives in
+    MacroMapping, and the riser in RiserVoice.
 */
 class PreDropEngine
 {
@@ -168,6 +170,7 @@ public:
         // Re-prime the coefficient cache so the next block re-applies the cutoff.
         lastHpfCutoff = -1.0f;
         idle          = {};
+        release.reset();
     }
 
     /** Hands the engine a riser sample built for its current sample rate, or
@@ -234,6 +237,8 @@ public:
             buffers.dry.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
         applySettings();
+        release.update (controls.amount, controls.depths, controls.settings, transport, sr, numSamples);
+        riser.setDownlifting (release.isActive());
         setTargets();
         const Engaged on = engageEffects();
         const Block block { buffer.getArrayOfWritePointers(), channels, numSamples };
@@ -296,7 +301,8 @@ private:
     // while the external one ramps in at the same level.
     void setTargets() noexcept
     {
-        const Targets t = MacroMapping::mapMacro (controls.amount, controls.depths, controls.settings);
+        Targets t = MacroMapping::mapMacro (controls.amount, controls.depths, controls.settings);
+        release.shape (t);
         sm.hpfCutoff  .setTargetValue (t.hpfCutoffHz);
         sm.reverbWet  .setTargetValue (external.reverb != nullptr ? 0.0f : t.reverbWet);
         sm.reverbSize .setTargetValue (t.reverbSize);
@@ -410,9 +416,17 @@ private:
     void keepExternalSends (const juce::AudioBuffer<float>& buffer, int channels, int numSamples) noexcept
     {
         for (int slot = 0; slot < 2; ++slot)
-            if ((slot == 0 ? external.reverb : external.delay) != nullptr)
-                for (int ch = 0; ch < juce::jmin (channels, externalChannels); ++ch)
+        {
+            if ((slot == 0 ? external.reverb : external.delay) == nullptr)
+                continue;
+            for (int ch = 0; ch < juce::jmin (channels, externalChannels); ++ch)
+            {
+                if (release.isActive())   // the downlifter: only the tail rings on
+                    buffers.external.clear (slot * externalChannels + ch, 0, numSamples);
+                else
                     buffers.external.copyFrom (slot * externalChannels + ch, 0, buffer, ch, 0, numSamples);
+            }
+        }
     }
 
     // The built-in reverb, wet only, into buffers.reverb (summed in later).
@@ -427,7 +441,12 @@ private:
         applyReverbParameters (reverbSize, reverbLevel);
 
         for (int ch = 0; ch < reverbChannels; ++ch)
-            buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+        {
+            if (release.isActive())   // the downlifter: only the tail rings on
+                buffers.reverb.clear (ch, 0, numSamples);
+            else
+                buffers.reverb.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+        }
 
         // PRE-DELAY: the send reaches the room that much later.
         for (int n = 0; n < numSamples; ++n)
@@ -468,6 +487,7 @@ private:
         // power, so they're raised 3 dB to sit at the same level.
         const bool pingPong = controls.settings.isOn (EffectSettings::Id::delayPingPong) && b.channels >= 2;
         const float sideGain = pingPong ? juce::MathConstants<float>::sqrt2 : 1.0f;
+        const float send = release.isActive() ? 0.0f : 1.0f;   // the downlifter: only the repeats ring on
 
         for (int n = 0; n < b.numSamples; ++n)
         {
@@ -476,14 +496,25 @@ private:
             if (sm.delayTime.isSmoothing())
                 delayLine.setDelay (sm.delayTime.getNextValue());
 
-            echo (b, n, wet, fb, pingPong);
+            echo (b, n, { wet, fb, send }, pingPong);
         }
     }
 
+    // The delay's gains for a sample: the echoes' level, the feedback, and
+    // how much of the signal goes in.
+    struct EchoGains
+    {
+        float wet;
+        float fb;
+        float send;
+    };
+
     // One sample of the delay: the repeats, through TONE's low-pass, fed back
     // (crossed over in ping-pong) and summed in at `wet`.
-    void echo (const Block& b, int n, float wet, float fb, bool pingPong) noexcept
+    void echo (const Block& b, int n, EchoGains g, bool pingPong) noexcept
     {
+        const float wet = g.wet;
+        const float fb  = g.fb;
         const float signal = controls.wetOnly ? 0.0f : 1.0f;
         std::array<float, 2> delayed {};
         for (int ch = 0; ch < b.channels; ++ch)
@@ -496,20 +527,20 @@ private:
             }
             else   // beyond stereo: as usual
             {
-                delayLine.pushSample (ch, b.data[ch][n] + state * fb);
+                delayLine.pushSample (ch, g.send * b.data[ch][n] + state * fb);
                 b.data[ch][n] = signal * b.data[ch][n] + state * wet;
             }
         }
 
         if (pingPong)
         {
-            delayLine.pushSample (0, 0.5f * (b.data[0][n] + b.data[1][n]) + delayed[1] * fb);
+            delayLine.pushSample (0, 0.5f * g.send * (b.data[0][n] + b.data[1][n]) + delayed[1] * fb);
             delayLine.pushSample (1, delayed[0] * fb);
         }
         else
         {
             for (int ch = 0; ch < juce::jmin (b.channels, 2); ++ch)
-                delayLine.pushSample (ch, b.data[ch][n] + delayed[(size_t) ch] * fb);
+                delayLine.pushSample (ch, g.send * b.data[ch][n] + delayed[(size_t) ch] * fb);
         }
 
         for (int ch = 0; ch < juce::jmin (b.channels, 2); ++ch)
@@ -655,6 +686,7 @@ private:
 
     RiserVoice    riser;
     HostTransport transport;
+    DropRelease   release;
 
     // One ramp per mapped target, so every parameter change glides instead of
     // stepping. Cutoffs ramp multiplicatively (even in pitch), the rest linearly.

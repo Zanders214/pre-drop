@@ -96,6 +96,21 @@ public:
     /** Where a sample is in its loop (0..1), or -1 while it isn't playing. Any thread. */
     float getPlayhead() const noexcept { return playhead.load(); }
 
+    /** While the downlifter plays (see DropRelease), the voice is the noise,
+        even with a sample loaded, and holds the build-up's level rather than
+        following the signal (the drop's, by then). A sample goes back to its
+        top, for the next build-up. */
+    void setDownlifting (bool shouldDownlift) noexcept
+    {
+        if (shouldDownlift && ! downlifting)
+        {
+            samplePos = 0.0;
+            armed     = true;
+            wait      = 0;
+        }
+        downlifting = shouldDownlift;
+    }
+
     /** Silent this block (the riser is down): no playhead to show. */
     void stop() noexcept { playhead = -1.0f; }
 
@@ -126,6 +141,8 @@ public:
     float followSignalLevel (const SampleBlock& b) noexcept
     {
         const float startRms = signalRms;
+        if (downlifting)
+            return startRms;
 
         double sum = 0.0;
         for (int ch = 0; ch < b.channels; ++ch)
@@ -146,7 +163,7 @@ public:
               const HostTransport& transport) noexcept
     {
         const RiserSample* s = sample.current();
-        const bool useSample = s != nullptr && s->length() > 0;
+        const bool useSample = ! downlifting && s != nullptr && s->length() > 0;
 
         // A sample that follows the project plays faster or slower by the
         // project's tempo over its own.
@@ -314,6 +331,7 @@ private:
     bool   armed     = true;   // down: the next build-up waits for a bar line
     int    wait      = 0;      // samples still to wait for it
     std::atomic<float> playhead { -1.0f };
+    bool   downlifting = false;
 
     // The user's sample, handed from the message thread to the audio thread.
     RtHandoff<RiserSample> sample;

@@ -23,6 +23,14 @@ namespace
 
     float paramValue (const PreDropAudioProcessor& p, const char* id) { return p.getState().getRawParameterValue (id)->load(); }
 
+    // The DOWNLIFTER button is dimmed while there is none.
+    void showDownlifterState (juce::TextButton& button, const PreDropAudioProcessor& p)
+    {
+        const bool on = paramValue (p, EffectSettings::specs[(size_t) EffectSettings::Id::dropOn].id) >= 0.5f;
+        if (const float alpha = on ? 1.0f : 0.45f; ! juce::exactlyEqual (alpha, button.getAlpha()))
+            button.setAlpha (alpha);
+    }
+
     // Per-effect depth knobs, in display order. IDs match PluginProcessor's
     // ParamID namespace; colours match the effect chips.
     constexpr std::array<const char*, 4> depthParamIds { "reverbDepth", "delayDepth", "riserDepth", "hpfDepth" };
@@ -152,6 +160,20 @@ PreDropAudioProcessorEditor::PreDropAudioProcessorEditor (PreDropAudioProcessor&
     }
     updateHpfButton();
 
+    // --- The DOWNLIFTER button and view --------------------------------------
+    // What plays after the drop: its button sits beside TRACKS and EFFECTS,
+    // and its view's BACK returns to the curve.
+    effectViews.dropButton.setButtonText ("DOWNLIFTER");
+    effectViews.dropButton.setLookAndFeel (&looks.pills);
+    effectViews.dropButton.setComponentID ("downlifter");
+    effectViews.dropButton.setTooltip ("After the drop (Amount falling from a build-up within a beat), the riser "
+                                       "falls and the reverb and delay ring out (dimmed while it's off). Click for its settings.");
+    effectViews.dropButton.onClick = [this] { setReveal (Reveal::drop); };
+    addAndMakeVisible (effectViews.dropButton);
+    showDownlifterState (effectViews.dropButton, processorRef);
+    effectViews.drop.setOnBack ([this] { setReveal (Reveal::curve); });
+    addChildComponent (effectViews.drop);
+
     // --- Indicators (a TRACK shows what the main is driving it with) ----------
     effectChips.setAmountSource ([this] { return displayedAmount(); });
     using Effect = EffectChips::Effect;
@@ -194,6 +216,7 @@ PreDropAudioProcessorEditor::~PreDropAudioProcessorEditor()
     effectsButton.setLookAndFeel (nullptr);
     riserUi.button.setLookAndFeel (nullptr);
     effectViews.hpfButton.setLookAndFeel (nullptr);
+    effectViews.dropButton.setLookAndFeel (nullptr);
     link.tracksButton.setLookAndFeel (nullptr);
     link.roleButton.setLookAndFeel (nullptr);
     for (auto& sl : depthSliders)
@@ -218,14 +241,16 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
     effectViews.reverb.setVisible (main && reveal == Reveal::reverb);
     effectViews.delay.setVisible (main && reveal == Reveal::delay);
     effectViews.hpf.setVisible (main && reveal == Reveal::hpf);
+    effectViews.drop.setVisible (main && reveal == Reveal::drop);
     link.matrix.setVisible (main && reveal == Reveal::tracks);
 
     // An effect's view covers the TRACKS / EFFECTS row (it has its own BACK).
     effectsButton.setVisible (main && ! showsEffectView());
     link.tracksButton.setVisible (main && ! showsEffectView());
+    effectViews.dropButton.setVisible (main && ! showsEffectView());
     if (riserUi.view.isVisible())
         riserUi.view.refresh();
-    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf, &effectViews.drop })
         if (view->isVisible())
             view->refresh();
 
@@ -238,7 +263,8 @@ void PreDropAudioProcessorEditor::setReveal (Reveal newReveal)
 
 bool PreDropAudioProcessorEditor::showsEffectView() const noexcept
 {
-    return reveal == Reveal::riser || reveal == Reveal::reverb || reveal == Reveal::delay || reveal == Reveal::hpf;
+    return reveal == Reveal::riser || reveal == Reveal::reverb || reveal == Reveal::delay || reveal == Reveal::hpf
+        || reveal == Reveal::drop;
 }
 
 bool PreDropAudioProcessorEditor::isTrackMode() const noexcept
@@ -430,9 +456,11 @@ void PreDropAudioProcessorEditor::timerCallback()
         applyRole();
     if (riserUi.view.isVisible())
         riserUi.view.refresh();
-    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf, &effectViews.drop })
         if (view->isVisible())
             view->refresh();
+    if (effectViews.dropButton.isVisible())
+        showDownlifterState (effectViews.dropButton, processorRef);
     if (effectViews.hpfButton.isVisible())
         updateHpfButton();
     if (presetButton.isVisible())
@@ -633,15 +661,18 @@ void PreDropAudioProcessorEditor::resized()
     area.removeFromTop (px (16.0f));                       // gap before chips
     effectChips.setBounds (area.removeFromTop (px (40.0f)));
 
-    // A slim row holds TRACKS and EFFECTS above the slot that the curve, the
-    // depth knobs and the TRACKS panel share.
+    // A slim row holds TRACKS, EFFECTS and DOWNLIFTER above the slot that the
+    // curve, the depth knobs and the TRACKS panel share.
     area.removeFromTop (px (8.0f));
     auto buttonRow = area.removeFromTop (px (18.0f));
     const int buttonRowTop = buttonRow.getY();
-    const int rowGap = px (8.0f);
-    link.tracksButton.setBounds (buttonRow.removeFromLeft ((buttonRow.getWidth() - rowGap) / 2));
+    const int rowGap  = px (8.0f);
+    const int buttonW = (buttonRow.getWidth() - 2 * rowGap) / 3;
+    link.tracksButton.setBounds (buttonRow.removeFromLeft (buttonW));
     buttonRow.removeFromLeft (rowGap);
-    effectsButton.setBounds (buttonRow);
+    effectsButton.setBounds (buttonRow.removeFromLeft (buttonW));
+    buttonRow.removeFromLeft (rowGap);
+    effectViews.dropButton.setBounds (buttonRow);
 
     area.removeFromTop (px (6.0f));                        // gap before reveal slot
     layout.reveal = area.removeFromTop (px (114.0f));
@@ -654,7 +685,7 @@ void PreDropAudioProcessorEditor::resized()
     link.panel.setBounds (layout.reveal.withTop (buttonRowTop));
     riserUi.view.setUiScale (s);
     riserUi.view.setBounds (layout.reveal.withTop (buttonRowTop));
-    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf })
+    for (auto* view : { &effectViews.reverb, &effectViews.delay, &effectViews.hpf, &effectViews.drop })
     {
         view->setUiScale (s);
         view->setBounds (layout.reveal.withTop (buttonRowTop));
