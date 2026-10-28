@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793105392733,
+  "lastUpdate": 1793146358756,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -577,6 +577,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.488,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "542668ea3353c6f2005bfc69a9609ba89538aacf",
+          "message": "Merge pull request #21 from Zanders214/claude/downlifter\n\nAdd a downlifter: after the drop, the riser falls and the tails ring out",
+          "timestamp": "2026-10-28T01:11:12+01:00",
+          "tree_id": "f29ac3cd0213768f60288a65b49e25997c048f0b",
+          "url": "https://github.com/Zanders214/pre-drop/commit/542668ea3353c6f2005bfc69a9609ba89538aacf"
+        },
+        "date": 1793146358392,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 53993.986,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.506,
             "unit": "%"
           }
         ]
