@@ -86,8 +86,9 @@ downlifter over it instead of cutting the build-up off:
 
 - the riser's noise turns around, sweeping down from where the build-up left it and
   fading out;
-- the reverb and delay stop taking in sound but keep ringing at their build-up level,
-  so the space you built carries across the drop and fades out with the noise;
+- the reverb and delay stop taking in sound but keep ringing at their build-up level
+  (as much of it as you choose), so the space you built carries across the drop and
+  fades out with the noise;
 - the high-pass opens straight away, so the drop lands with its low end, dry and full.
 
 There's nothing else to automate. Turning Amount down slowly, or from below 50%, isn't
@@ -100,7 +101,14 @@ while switched off):
 - **LENGTH**: 1/2, 1, 2 (the default) or 4 bars, at the project's tempo and meter;
 - **LEVEL** of the noise: 50% is the riser's own level, 100% is 6 dB louder, and 0%
   leaves just the reverb and delay tails;
-- **FALL TO**: where the noise ends up (150 Hz by default).
+- **FALL TO**: where the noise ends up (150 Hz by default);
+- **REVERB** and **DELAY**: how much of the build-up's reverb and echoes ring on
+  through it. 100% (the default) keeps all of it, 50% half (6 dB down), and 0% cuts
+  that effect off at the drop.
+
+The downlifter has no high-pass of its own. The noise is band-passed, so it has no low
+end to start with, and the reverb and delay tails were filled with the build-up's
+high-passed sound, so they keep that cut. The drop itself plays with its full low end.
 
 The noise plays on the MAIN, like the riser; linked TRACKs and RETURNs let their own
 reverb and delay ring out. With a riser sample loaded the downlifter is the noise for
@@ -193,7 +201,7 @@ delays rarely have any).
 | **Tracks**  | On the main: what is linked, and each linked track's HPF / REV / DLY level. |
 | **Sources** | The pills under the knobs in EFFECTS: what each effect uses (reverb and delay: *BUILT-IN* or one of your VST3 effects; riser: *NOISE* or your own sample, which you can also drop anywhere on the plugin; high-pass: its slope). Each opens that effect's view. On TRACK / RETURN the reverb and delay pills choose their source directly. |
 | **Effect views** | REVERB, DELAY, HIGH-PASS: the source and the built-in effect's settings (see Shaping the built-in effects above). BACK returns to EFFECTS. |
-| **Downlifter** | The button beside TRACKS and EFFECTS: what plays after the drop, its LENGTH, LEVEL and FALL TO, and AFTER THE DROP to switch it off (see The downlifter above). BACK returns to the curve. |
+| **Downlifter** | The button beside TRACKS and EFFECTS: what plays after the drop, its LENGTH, LEVEL, FALL TO, how much REVERB and DELAY ring on, and AFTER THE DROP to switch it off (see The downlifter above). BACK returns to the curve. |
 | **Riser view** | The sample with its bars and beats (drag it to stretch it, drag its loop end to set the bars), its source (*Load riser sample...* / *Use built-in noise*), BPM, BARS, meter, MATCH PROJECT and KEEP PITCH (see Riser timing above); or, with the noise, its START, END and RESONANCE. BACK returns to EFFECTS. |
 | **Effects** | Per-effect depth for Reverb, Delay, Riser and High-Pass. 50% (default) is the balanced level, 0% switches that effect off, 100% doubles it (+6 dB; the high-pass goes from 800 Hz to 3.2 kHz). |
 

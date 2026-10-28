@@ -230,7 +230,7 @@ void testProcessorBasics()
     p.changeProgramName (0, "ignored");
     check (p.getProgramName (0).isEmpty(), "the program is unnamed");
 
-    check (p.getParameters().size() == 11 + (int) EffectSettings::count, "30 parameters are exposed (11, and the effects' settings)");
+    check (p.getParameters().size() == 11 + (int) EffectSettings::count, "32 parameters are exposed (11, and the effects' settings)");
     check (! p.getState().getParameter ("role")->isAutomatable(), "the MAIN / TRACK / RETURN role stays out of automation");
     check (approx (param (p, "amount"), 0.0f, 1.0e-6f), "amount defaults to 0");
     check (approx (param (p, "mix"), 1.0f, 1.0e-6f), "mix defaults to fully wet");
@@ -2016,8 +2016,17 @@ void testDownlifterView()
     check (drop.isVisible() && ! button->isVisible() && ! effects->isVisible() && drop.getY() <= effects->getY(),
            "it opens the DOWNLIFTER view, over the button row");
     check (drop.knob (Id::dropLength) != nullptr && drop.knob (Id::dropLevel) != nullptr && drop.knob (Id::dropEnd) != nullptr
+             && drop.knob (Id::dropReverb) != nullptr && drop.knob (Id::dropDelay) != nullptr
              && drop.knob (Id::reverbSize) == nullptr && drop.sourcePill() == nullptr,
-           "it has LENGTH, LEVEL and FALL TO");
+           "it has LENGTH, LEVEL, FALL TO, and how much REVERB and DELAY ring on");
+    if (drop.knob (Id::dropReverb) != nullptr)
+    {
+        const auto& reverbKnob = *drop.knob (Id::dropReverb);
+        const auto& delayKnob  = *drop.knob (Id::dropDelay);
+        check (reverbKnob.valueText() == "100%" && delayKnob.valueText() == "100%"
+                 && reverbKnob.getWidth() > 0 && ! reverbKnob.getBounds().intersects (delayKnob.getBounds()),
+               "both at 100% by default, side by side");
+    }
     if (drop.knob (Id::dropLength) == nullptr)
         return;
     check (drop.knob (Id::dropLength)->valueText() == "2 BARS" && drop.dropSwitch().getToggleState()
