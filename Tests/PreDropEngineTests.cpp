@@ -1292,6 +1292,29 @@ void testDownlifter()
         leak = std::max (leak, std::abs (played.out[i] - played.in[i] - quiet.out[i]));
     check (leak < 1.0e-5f, "with nothing new going into them: the drop plays dry over the tails");
 
+    // REVERB and DELAY: how much of each rings on (0%: cut off at the drop).
+    auto cut = noNoise;
+    cut.set (Id::dropReverb, 0.0f);
+    cut.set (Id::dropDelay, 0.0f);
+    check (peakOf (renderDrop (cut, tails).out, 0.2, 3.0) < 1.0e-4f, "REVERB and DELAY at 0% cut them off at the drop");
+    for (const auto& [id, name] : { std::pair { Id::dropReverb, "REVERB" }, std::pair { Id::dropDelay, "DELAY" } })
+    {
+        PreDropEngine::Depths one;
+        one.riser  = 0.0f;
+        one.reverb = id == Id::dropReverb ? 0.5f : 0.0f;
+        one.delay  = id == Id::dropDelay  ? 0.5f : 0.0f;
+        auto half = noNoise;
+        half.set (id, 0.5f);
+        const float full    = rmsOf (renderDrop (noNoise, one).out, 0.1, 0.5);
+        const float halfDb  = db (rmsOf (renderDrop (half, one).out, 0.1, 0.5) / full);
+        auto other = noNoise;   // the other one at 0% leaves this one alone
+        other.set (id == Id::dropReverb ? Id::dropDelay : Id::dropReverb, 0.0f);
+        const float otherDb = db (rmsOf (renderDrop (other, one).out, 0.1, 0.5) / full);
+        check (full > 0.0f && approx (halfDb, -6.02f, 0.3f) && approx (otherDb, 0.0f, 0.01f),
+               std::string (name) + " at 50% keeps half its tail (" + std::to_string (halfDb).substr (0, 5)
+                 + " dB), and only its own");
+    }
+
     // Only a drop: not a slow turn down, nor a fall from below a build-up.
     check (peakOf (renderDrop (oneBar, PreDropEngine::Depths {}, false, 2.0).out, 0.2, 3.0) < 1.0e-4f,
            "turning Amount down over 2 s plays none");

@@ -93,6 +93,8 @@ public:
                 addKnob (Id::dropLength, "How long the downlifter lasts after the drop, in bars.");
                 addKnob (Id::dropLevel,  "How loud its noise is: 50% is the riser's level, 0% leaves just the tails.");
                 addKnob (Id::dropEnd,    "Where its noise falls to, from where the riser got to.");
+                addKnob (Id::dropReverb, "How much of the build-up's reverb rings on after the drop: 100% all of it, 0% none (cut at the drop).");
+                addKnob (Id::dropDelay,  "How much of the build-up's echoes ring on after the drop: 100% all of them, 0% none (cut at the drop).");
                 addToggle (dropPill, Id::dropOn, "AFTER THE DROP",
                            "On: when Amount drops (from 50% or more to 10% or less within a beat), the riser falls "
                            "and the reverb and delay ring out. Off: the drop cuts them off.");

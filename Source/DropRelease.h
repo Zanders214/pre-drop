@@ -17,8 +17,9 @@
 
       - the riser's noise turns around, sweeping down from where the build-up
         left it to FALL TO, at LEVEL (50%: the riser's own level), and fades out;
-      - the reverb and delay stop taking in sound but keep their build-up
-        levels, so their tails ring on over the drop, fading out with it.
+      - the reverb and delay stop taking in sound but ring on over the drop
+        at their build-up level times REVERB and DELAY (100%: all of it, 0%:
+        cut off at the drop), fading out with it.
 
     The high-pass is left to Amount, so the drop lands with its low end.
     Turning Amount back up past 10% ends the downlifter early. Plain
@@ -107,9 +108,16 @@ private:
     void start (const MacroMapping::Depths& depths, const EffectSettings& settings, double barLength,
                 double bpm, double sampleRate) noexcept
     {
-        // From where the build-up peaked: its reverb, delay and riser sweep,
-        // and the noise at LEVEL in place of the riser's depth.
+        // From where the build-up peaked: its reverb and delay (as much of
+        // them as REVERB and DELAY keep), its riser sweep, and the noise at
+        // LEVEL in place of the riser's depth.
         from = MacroMapping::mapMacro (peak, depths, settings);
+        const float keepReverb = settings[EffectSettings::Id::dropReverb];
+        const float keepDelay  = settings[EffectSettings::Id::dropDelay];
+        from.reverbWet   *= keepReverb;
+        from.reverbLevel *= keepReverb;
+        from.delayWet    *= keepDelay;
+        from.delayLevel  *= keepDelay;
         auto asNoise  = depths;
         asNoise.riser = settings[EffectSettings::Id::dropLevel];
         noiseLevel    = MacroMapping::mapMacro (peak, asNoise, settings).riserLevel;

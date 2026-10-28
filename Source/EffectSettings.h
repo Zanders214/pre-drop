@@ -17,7 +17,8 @@
       - RISER (the built-in noise): where its sweep STARTs and ENDs, and its
         RESONANCE.
       - DOWNLIFTER (after the drop): whether there is one, its LENGTH in bars,
-        its LEVEL and where its noise FALLs TO (see DropRelease).
+        its LEVEL, where its noise FALLs TO, and how much of the build-up's
+        REVERB and DELAY ring on through it (see DropRelease).
 
     Each is a plugin parameter (specs lists them, with their ranges and
     defaults, which are the sound PreDrop had before they existed). The values
@@ -32,7 +33,7 @@ struct EffectSettings
         delaySync, delayNote, delayTime, delayFeedback, delayTone, delayPingPong,
         hpfSlope, hpfResonance,
         riserStart, riserEnd, riserResonance,
-        dropOn, dropLength, dropLevel, dropEnd,
+        dropOn, dropLength, dropLevel, dropEnd, dropReverb, dropDelay,
         count
     };
     static constexpr size_t count = static_cast<size_t> (Id::count);
@@ -87,6 +88,8 @@ struct EffectSettings
         { "dropLength",     "Downlifter Length", "LENGTH",   Kind::bars,         0.0f,    3.0f,     2.0f,      0.0f },
         { "dropLevel",      "Downlifter Level", "LEVEL",     Kind::percent,      0.0f,    1.0f,     0.5f,      0.0f },
         { "dropEnd",        "Downlifter Fall To", "FALL TO", Kind::hertz,        30.0f,   2000.0f,  150.0f,    200.0f },
+        { "dropReverb",     "Downlifter Reverb", "REVERB",   Kind::percent,      0.0f,    1.0f,     1.0f,      0.0f },
+        { "dropDelay",      "Downlifter Delay", "DELAY",     Kind::percent,      0.0f,    1.0f,     1.0f,      0.0f },
     } };
 
     EffectSettings() noexcept

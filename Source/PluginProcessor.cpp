@@ -83,8 +83,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout PreDropAudioProcessor::creat
         const auto& spec = EffectSettings::specs[i];
         const auto  show = [id] (float value, int) { return EffectSettings::format (id, value); };
         using Kind = EffectSettings::Kind;
-        // The downlifter's came later: a higher version, as hosts (AU) ask.
-        const int version = id >= EffectSettings::Id::dropOn ? 2 : 1;
+        // Later parameters get a higher version, as hosts (AU) ask, so that
+        // automation saved before them still finds the right ones: 2 for the
+        // downlifter, 3 for its REVERB and DELAY.
+        int version = 1;
+        if (id >= EffectSettings::Id::dropReverb)
+            version = 3;
+        else if (id >= EffectSettings::Id::dropOn)
+            version = 2;
         if (spec.kind == Kind::toggle)
         {
             layout.add (std::make_unique<AudioParameterBool> (ParameterID { spec.id, version }, spec.name, spec.defaultValue >= 0.5f));
