@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793181258025,
+  "lastUpdate": 1794068711614,
   "repoUrl": "https://github.com/Zanders214/pre-drop",
   "entries": {
     "ZandersPreDrop DSP": [
@@ -645,6 +645,40 @@ window.BENCHMARK_DATA = {
           {
             "name": "DSP load @48k/512",
             "value": 0.352,
+            "unit": "%"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "152227414+Zanders214@users.noreply.github.com",
+            "name": "Dennis Zanders",
+            "username": "Zanders214"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81440d113fe8b23a06a146a7e900d87d8c3c36f2",
+          "message": "Merge pull request #23 from Zanders214/claude/modest-volta-vmbfty\n\nAdd an AAX build for Pro Tools on macOS and Windows",
+          "timestamp": "2026-11-07T17:21:31+01:00",
+          "tree_id": "24aa40be7ba12da01cc3e4c991909d22e18c48da",
+          "url": "https://github.com/Zanders214/pre-drop/commit/81440d113fe8b23a06a146a7e900d87d8c3c36f2"
+        },
+        "date": 1794068711073,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "processBlock",
+            "value": 55400.778,
+            "unit": "ns/block"
+          },
+          {
+            "name": "DSP load @48k/512",
+            "value": 0.519,
             "unit": "%"
           }
         ]
