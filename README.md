@@ -2,7 +2,7 @@
 
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tape-stop_pre-drop&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tape-stop_pre-drop)
 
-A one-knob "build-up" effect plugin for DAWs (VST3 / AU / Standalone), built with
+A one-knob "build-up" effect plugin for DAWs (VST3 / AU / AAX / Standalone), built with
 [JUCE](https://juce.com). Turn a steady loop into the tension before a drop with a
 single macro: as **Amount** rises, the plugin cuts the low end, swells reverb, washes
 the signal out with delay, and lifts a filtered-noise riser underneath, all together.
@@ -224,6 +224,51 @@ cmake -B build -DJUCE_PATH=/path/to/JUCE
 
 Built plugins land under `build/PreDrop_artefacts/`.
 
+### AAX (Pro Tools)
+
+On macOS and Windows the build also makes an AAX plug-in,
+`build/PreDrop_artefacts/Release/AAX/ZandersPreDrop.aaxplugin`. Linux has no AAX, so
+it builds VST3 and Standalone only. JUCE 8 ships the AAX SDK in its
+`juce_audio_plugin_client` module, so there is nothing extra to download.
+
+The AAX offers mono and stereo inserts. Multi-mono and AudioSuite are switched off:
+both would create extra PreDrop instances that join the track link on their own.
+
+Pro Tools only loads AAX plug-ins signed with PACE's wraptool. An unsigned build
+(every local build, and every CI build without the signing secrets) loads only in
+**Pro Tools Developer**, which Avid gives to members of its AAX developer programme.
+To try it, copy the `.aaxplugin` to `/Library/Application Support/Avid/Audio/Plug-Ins`
+(macOS) or `C:\Program Files\Common Files\Avid\Audio\Plug-Ins` (Windows) and open
+Pro Tools Developer.
+
+#### Signing
+
+The release workflow signs the AAX with PACE's `wraptool` when these repository
+secrets are set, and leaves it unsigned (with a notice in the run) when none are:
+
+| Secret | Used for |
+|---|---|
+| `PACE_ACCOUNT`, `PACE_PASSWORD` | Your PACE / iLok developer account |
+| `PACE_WCGUID` | The wrap configuration GUID PACE gives you for PreDrop |
+| `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD` | Base64 of your Developer ID Application certificate (`.p12`) and its password (macOS) |
+| `APPLE_SIGN_ID` | That certificate's identity, e.g. `Developer ID Application: Name (TEAMID)` (macOS) |
+| `WINDOWS_CERTIFICATE_PFX`, `WINDOWS_CERTIFICATE_PASSWORD` | Base64 of your code-signing certificate (`.pfx`) and its password (Windows) |
+
+If only some of a platform's secrets are set the release fails, rather than quietly
+shipping an unsigned AAX. `wraptool` comes with PACE's Eden tools and needs iLok
+License Manager, neither of which GitHub's hosted runners have, so signed releases
+need a runner where they are installed. The workflow looks for `wraptool` on the
+`PATH`, at PACE's default macOS location, or at the path in the `PACE_WRAPTOOL`
+repository variable. Signing works the same by hand:
+
+```sh
+wraptool sign --verbose --account <account> --password <password> --wcguid <wcguid> \
+  --signid "Developer ID Application: Name (TEAMID)" \
+  --in ZandersPreDrop.aaxplugin --out signed/ZandersPreDrop.aaxplugin
+```
+
+On Windows, use `--keyfile <cert.pfx> --keypassword <password>` in place of `--signid`.
+
 ## Tests
 
 The DSP core (`PreDropEngine`) has a headless, framework-free test harness, and
@@ -294,14 +339,20 @@ bundling the TTFs as `BinaryData` is a localized swap in `PreDropTheme.h`.
 
 GitHub Actions builds on Linux/macOS/Windows, runs the unit tests, and validates the
 VST3 with [`pluginval`](https://github.com/Tracktion/pluginval) at strictness level 5.
+The macOS and Windows jobs also upload the unsigned AAX as its own artifact
+(`PreDrop-AAX-macOS` / `PreDrop-AAX-Windows`).
 
 When a pull request from `dev` is merged into `main`, the release workflow builds and
 tests all three platforms and publishes a GitHub Release containing:
 
-- a Windows x64 ZIP (VST3 and standalone app),
+- a Windows x64 ZIP (VST3, AAX and standalone app),
 - a Linux x64 tarball (VST3 and standalone app), and
 - a universal macOS installer package (Apple Silicon and Intel).
 
 The macOS installer puts the VST3 in `/Library/Audio/Plug-Ins/VST3`, the AU in
-`/Library/Audio/Plug-Ins/Components`, and the standalone app in `/Applications`.
-After installation, restart Ableton Live so it scans the newly installed plug-in.
+`/Library/Audio/Plug-Ins/Components`, the AAX in
+`/Library/Application Support/Avid/Audio/Plug-Ins`, and the standalone app in
+`/Applications`. On Windows, copy the ZIP's `AAX/ZandersPreDrop.aaxplugin` to
+`C:\Program Files\Common Files\Avid\Audio\Plug-Ins`. After installation, restart
+your DAW so it scans the newly installed plug-in. The AAX is only PACE-signed when
+the signing secrets are set (see [Signing](#signing)).

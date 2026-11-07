@@ -38,12 +38,17 @@ FetchContent_Declare(signalsmith-stretch
     SYSTEM)             # its headers don't get our warning flags
 FetchContent_MakeAvailable(signalsmith-stretch)
 
+set(PREDROP_FORMATS VST3 AU Standalone)
+if(APPLE OR WIN32)
+    list(APPEND PREDROP_FORMATS AAX)
+endif()
+
 juce_add_plugin(PreDrop
     COMPANY_NAME                "ZandersAudio"
     BUNDLE_ID                   com.zandersaudio.predrop
     PLUGIN_MANUFACTURER_CODE    Zand
     PLUGIN_CODE                 Pdrp
-    FORMATS                     VST3 AU Standalone
+    FORMATS                     ${PREDROP_FORMATS}
     PRODUCT_NAME                "ZandersPreDrop"
     IS_SYNTH                    FALSE
     NEEDS_MIDI_INPUT            FALSE
@@ -52,7 +57,10 @@ juce_add_plugin(PreDrop
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD     FALSE
     VST3_CATEGORIES             Fx Filter
-    AU_MAIN_TYPE                kAudioUnitType_Effect)
+    AU_MAIN_TYPE                kAudioUnitType_Effect
+    AAX_IDENTIFIER              com.zandersaudio.predrop
+    AAX_CATEGORY                AAX_ePlugInCategory_Effect
+    DISABLE_AAX_MULTI_MONO      TRUE)
 
 juce_generate_juce_header(PreDrop)
 
@@ -80,7 +88,8 @@ target_compile_definitions(PreDrop
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
-        JUCE_DISPLAY_SPLASH_SCREEN=0)
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JucePlugin_AAXDisableAudioSuite=1)
 
 target_link_libraries(PreDrop
     PRIVATE
