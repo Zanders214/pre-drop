@@ -76,6 +76,150 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
+      - name: Find AAX
+        id: aax
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAX="$(find build/PreDrop_artefacts -type d -name '*.aaxplugin' -prune -print -quit)"
+          test -n "$AAX"
+          echo "path=$AAX" >> "$GITHUB_OUTPUT"
+
+      - name: Check AAX signing secrets
+        id: pace
+        if: runner.os != 'Linux'
+        shell: bash
+        env:
+          PACE_ACCOUNT: ${{ secrets.PACE_ACCOUNT }}
+          PACE_PASSWORD: ${{ secrets.PACE_PASSWORD }}
+          PACE_WCGUID: ${{ secrets.PACE_WCGUID }}
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGN_ID: ${{ secrets.APPLE_SIGN_ID }}
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(PACE_ACCOUNT PACE_PASSWORD PACE_WCGUID)
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            required+=(APPLE_CERTIFICATE_P12 APPLE_CERTIFICATE_PASSWORD APPLE_SIGN_ID)
+          else
+            required+=(WINDOWS_CERTIFICATE_PFX WINDOWS_CERTIFICATE_PASSWORD)
+          fi
+          set_count=0
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -n "${!name}" ]; then
+              set_count=$((set_count + 1))
+            else
+              missing+=("$name")
+            fi
+          done
+          if [ "$set_count" -eq 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AAX signing secrets are not set, so the AAX is not PACE-signed and only loads in Pro Tools Developer."
+          elif [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::AAX signing is partly configured. Missing secrets for ${RUNNER_OS}: ${missing[*]}"
+            exit 1
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find wraptool
+        id: wraptool
+        if: steps.pace.outputs.enabled == 'true'
+        shell: bash
+        env:
+          PACE_WRAPTOOL: ${{ vars.PACE_WRAPTOOL }}
+        run: |
+          set -euo pipefail
+          for candidate in "${PACE_WRAPTOOL:-}" "$(command -v wraptool || true)" \
+                           /Applications/PACEAntiPiracy/Eden/Fusion/Current/bin/wraptool; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::wraptool was not found. Install PACE Eden tools and iLok License Manager on the runner, or set the PACE_WRAPTOOL repository variable to its path."
+          exit 1
+
+      - name: Sign AAX (macOS)
+        if: steps.pace.outputs.enabled == 'true' && runner.os == 'macOS'
+        shell: bash
+        env:
+          WRAPTOOL: ${{ steps.wraptool.outputs.path }}
+          AAX: ${{ steps.aax.outputs.path }}
+          PACE_ACCOUNT: ${{ secrets.PACE_ACCOUNT }}
+          PACE_PASSWORD: ${{ secrets.PACE_PASSWORD }}
+          PACE_WCGUID: ${{ secrets.PACE_WCGUID }}
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGN_ID: ${{ secrets.APPLE_SIGN_ID }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/aax-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT="$RUNNER_TEMP/aax-signing.p12"
+          trap 'rm -f "$CERT"' EXIT
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 --decode > "$CERT"
+          security import "$CERT" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          SIGNED="$RUNNER_TEMP/aax-signed/$(basename "$AAX")"
+          mkdir -p "$(dirname "$SIGNED")"
+          "$WRAPTOOL" sign --verbose \
+            --account "$PACE_ACCOUNT" \
+            --password "$PACE_PASSWORD" \
+            --wcguid "$PACE_WCGUID" \
+            --signid "$APPLE_SIGN_ID" \
+            --in "$AAX" \
+            --out "$SIGNED"
+          rm -rf "$AAX"
+          ditto "$SIGNED" "$AAX"
+          "$WRAPTOOL" verify --verbose --in "$AAX"
+
+      - name: Sign AAX (Windows)
+        if: steps.pace.outputs.enabled == 'true' && runner.os == 'Windows'
+        shell: bash
+        env:
+          WRAPTOOL: ${{ steps.wraptool.outputs.path }}
+          AAX: ${{ steps.aax.outputs.path }}
+          PACE_ACCOUNT: ${{ secrets.PACE_ACCOUNT }}
+          PACE_PASSWORD: ${{ secrets.PACE_PASSWORD }}
+          PACE_WCGUID: ${{ secrets.PACE_WCGUID }}
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT="$RUNNER_TEMP/aax-signing.pfx"
+          trap 'rm -f "$CERT"' EXIT
+          printf '%s' "$WINDOWS_CERTIFICATE_PFX" | base64 --decode > "$CERT"
+
+          SIGNED="$RUNNER_TEMP/aax-signed/$(basename "$AAX")"
+          mkdir -p "$(dirname "$SIGNED")"
+          "$WRAPTOOL" sign --verbose \
+            --account "$PACE_ACCOUNT" \
+            --password "$PACE_PASSWORD" \
+            --wcguid "$PACE_WCGUID" \
+            --keyfile "$CERT" \
+            --keypassword "$WINDOWS_CERTIFICATE_PASSWORD" \
+            --in "$AAX" \
+            --out "$SIGNED"
+          rm -rf "$AAX"
+          cp -R "$SIGNED" "$AAX"
+          "$WRAPTOOL" verify --verbose --in "$AAX"
+
+      - name: Remove signing keychain
+        if: always() && steps.pace.outputs.enabled == 'true' && runner.os == 'macOS'
+        shell: bash
+        run: security delete-keychain "$RUNNER_TEMP/aax-signing.keychain-db" || true
+
       - name: Package Linux release
         if: runner.os == 'Linux'
         shell: bash
@@ -99,6 +243,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force package/ZandersPreDrop/VST3 | Out-Null
           New-Item -ItemType Directory -Force package/ZandersPreDrop/Standalone | Out-Null
+          New-Item -ItemType Directory -Force package/ZandersPreDrop/AAX | Out-Null
           New-Item -ItemType Directory -Force dist | Out-Null
 
           $vst3 = Get-ChildItem build/PreDrop_artefacts -Recurse -Directory -Filter *.vst3 | Select-Object -First 1
@@ -106,10 +251,13 @@ jobs:
             Where-Object { $_.FullName -match '[\\/]Standalone[\\/]' } |
             Select-Object -First 1
           if (-not $vst3) { throw 'Built VST3 was not found' }
+          $aax = Get-ChildItem build/PreDrop_artefacts -Recurse -Directory -Filter *.aaxplugin | Select-Object -First 1
           if (-not $standalone) { throw 'Built standalone app was not found' }
+          if (-not $aax) { throw 'Built AAX was not found' }
 
           Copy-Item $vst3.FullName package/ZandersPreDrop/VST3 -Recurse
           Copy-Item $standalone.FullName package/ZandersPreDrop/Standalone/
+          Copy-Item $aax.FullName package/ZandersPreDrop/AAX -Recurse
           Compress-Archive -Path package/ZandersPreDrop -DestinationPath dist/ZandersPreDrop-Windows-x64.zip
 
       - name: Build macOS installer
@@ -121,19 +269,23 @@ jobs:
           mkdir -p \
             "$PKG_ROOT/Library/Audio/Plug-Ins/VST3" \
             "$PKG_ROOT/Library/Audio/Plug-Ins/Components" \
+            "$PKG_ROOT/Library/Application Support/Avid/Audio/Plug-Ins" \
             "$PKG_ROOT/Applications" \
             dist
 
           VST3="$(find build/PreDrop_artefacts -type d -name '*.vst3' -print -quit)"
           AU="$(find build/PreDrop_artefacts -type d -name '*.component' -print -quit)"
           APP="$(find build/PreDrop_artefacts -type d -name 'ZandersPreDrop.app' -print -quit)"
+          AAX="$(find build/PreDrop_artefacts -type d -name '*.aaxplugin' -prune -print -quit)"
           test -n "$VST3"
           test -n "$AU"
           test -n "$APP"
+          test -n "$AAX"
 
           ditto "$VST3" "$PKG_ROOT/Library/Audio/Plug-Ins/VST3/$(basename "$VST3")"
           ditto "$AU" "$PKG_ROOT/Library/Audio/Plug-Ins/Components/$(basename "$AU")"
           ditto "$APP" "$PKG_ROOT/Applications/$(basename "$APP")"
+          ditto "$AAX" "$PKG_ROOT/Library/Application Support/Avid/Audio/Plug-Ins/$(basename "$AAX")"
 
           VERSION="$(sed -nE 's/^project\(PreDrop VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
           test -n "$VERSION"
@@ -184,6 +336,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          AAX_SIGNED: ${{ secrets.PACE_ACCOUNT != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -194,9 +347,14 @@ jobs:
           {
             printf 'Automated release from dev → main PR [#%s](%s): %s\n\n' "$PR_NUMBER" "$PR_URL" "$PR_TITLE"
             printf '### Downloads\n\n'
-            printf -- '- **macOS:** Run `ZandersPreDrop-macOS-universal.pkg`. It installs the VST3 and AU plug-ins system-wide, plus the standalone app in `/Applications`.\n'
-            printf -- '- **Windows:** `ZandersPreDrop-Windows-x64.zip`\n'
+            printf -- '- **macOS:** Run `ZandersPreDrop-macOS-universal.pkg`. It installs the VST3, AU and AAX plug-ins system-wide, plus the standalone app in `/Applications`.\n'
+            printf -- '- **Windows:** `ZandersPreDrop-Windows-x64.zip`. Copy `AAX/ZandersPreDrop.aaxplugin` to `C:\\Program Files\\Common Files\\Avid\\Audio\\Plug-Ins` for Pro Tools.\n'
             printf -- '- **Linux:** `ZandersPreDrop-Linux-x64.tar.gz`\n'
+            if [ "$AAX_SIGNED" = "true" ]; then
+              printf '\nThe AAX plug-ins are PACE-signed and load in Pro Tools.\n'
+            else
+              printf '\nThe AAX plug-ins are not PACE-signed, so they only load in Pro Tools Developer.\n'
+            fi
           } > RELEASE_NOTES.md
 
           if gh release view "$TAG" >/dev/null 2>&1; then

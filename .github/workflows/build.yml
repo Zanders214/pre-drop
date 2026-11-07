@@ -114,6 +114,34 @@ jobs:
           ./pluginval.exe --strictness-level 5 --validate
           "$(find build -name '*.vst3' -type d | head -n 1)"
 
+      - name: Package AAX (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAX="$(find build/PreDrop_artefacts -type d -name '*.aaxplugin' -prune -print -quit)"
+          test -n "$AAX"
+          mkdir -p aax
+          ditto -c -k --keepParent "$AAX" aax/ZandersPreDrop-AAX-macOS-unsigned.zip
+
+      - name: Package AAX (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAX="$(find build/PreDrop_artefacts -type d -name '*.aaxplugin' -prune -print -quit)"
+          test -n "$AAX"
+          mkdir -p aax
+          7z a aax/ZandersPreDrop-AAX-Windows-unsigned.zip "./$AAX"
+
+      - name: Upload AAX
+        if: runner.os != 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PreDrop-AAX-${{ runner.os }}
+          path: aax/*
+          if-no-files-found: error
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
